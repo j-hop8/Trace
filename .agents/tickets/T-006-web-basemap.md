@@ -13,8 +13,16 @@ hues stay free to mean "water domain" and "forest domain".
 Protomaps use incompatible layer names — staging through it means doing the restyle twice.
 
 **Steps:**
-1. Fetch a Taiwan extract once (checked into `data/`, gitignored):
-   `pmtiles extract https://build.protomaps.com/<YYYYMMDD>.pmtiles data/taiwan-base.pmtiles --bbox=119.3,21.85,122.05,25.35`
+1. Fetch a Taiwan extract once (lands in `data/`, gitignored):
+   `pmtiles extract https://build.protomaps.com/<YYYYMMDD>.pmtiles data/taiwan-base.pmtiles --bbox=119.3,21.85,122.05,25.35 --maxzoom=14`
+
+   **Do not hardcode a build date.** Protomaps retains only about a week of daily builds plus the
+   latest patch per release — a pinned date 404s a month later, and the failure looks like a
+   broken script rather than an expired URL. Read the current list from
+   https://maps.protomaps.com/builds/ and record the date you used in the manifest for
+   provenance. Verified 2026-08-10: the URL pattern is `https://build.protomaps.com/YYYYMMDD.pmtiles`,
+   the planet file is ~137 GB, and it serves `accept-ranges: bytes` — so `extract` pulls only the
+   Taiwan window over HTTP range requests. Never download the planet.
 2. Register the pmtiles protocol on MapLibre before the first map instance is constructed.
 3. Start from a Protomaps CC0 style, then suppress: water fills → neutral grey, landuse/park/
    forest greens → the same greys, labels dimmed, roads thinned.
