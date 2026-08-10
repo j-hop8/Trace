@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/j-hop8/Trace/schema/feature.schema.json",
+  "title": "Trace feature",
+  "description": "The general spine (proposal B4). Every feature in every domain has this shape, which is what lets rendering, the time slider, and cross-layer analysis stay domain-agnostic. Adding a domain adds a `domain` value and a hue — never a field.",
+
+  "type": "object",
+  "required": ["type", "geometry", "properties"],
+  "properties": {
+    "type": { "const": "Feature" },
+    "id": {
+      "description": "Stable within a domain and a pipeline run. Used to key selection state.",
+      "type": ["string", "integer"]
+    },
+    "geometry": {
+      "description": "GeoJSON geometry in EPSG:4326.",
+      "type": "object",
+      "required": ["type", "coordinates"],
+      "properties": {
+        "type": {
+          "enum": ["Polygon", "MultiPolygon", "LineString", "MultiLineString", "Point"]
+        }
+      }
+    },
+    "properties": { "$ref": "#/$defs/properties" }
+  },
+
+  "$defs": {
+    "properties": {
+      "type": "object",
+      "required": ["domain", "valid_from", "change_type", "metric", "source", "method", "confidence"],
+      "additionalProperties": true,
+      "properties": {
+        "domain": {
+          "description": "Which subject this feature belongs to. Drives the extent hue.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "subtype": {
+          "description": "Optional finer class within the domain — pond, reservoir, river, coast.",
+          "type": ["string", "null"]
+        },
+
+        "valid_from": {
+          "description": "Year the state begins. An integer year, not a date: every v1 source is annual, and the time slider filters on this numerically — `[\"<=\", [\"get\", \"valid_from\"], year]`. A date string would break that expression and imply precision the 30 m annual sources do not have.",
+          "type": "integer",
+          "minimum": 1500,
+          "maximum": 2100
+        },
+        "valid_to": {
+          "description": "Year the state ends. null means the state is current — it has not ended as of the source's last observed year.",
+          "type": ["integer", "null"],
+          "minimum": 1500,
+          "maximum": 2100
+        },
+
+        "change_type": {
+          "description": "The universal change signal. Rendering colour is a pure function of (domain, change_type): extent uses the domain hue, loss uses the cross-domain red/amber.",
+          "enum": ["gain", "loss", "stable"]
+        },
+
+        "metric": {
+          "description": "Quantified magnitude. At least one measure must be present — a feature with no number cannot answer \"how much\", which is the product's whole claim.",
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "area_ha": { "type": "number", "minimum": 0 },
+            "length_m": { "type": "number", "minimum": 0 }
+          }
+        },
+
+        "source": {
+          "description": "Dataset and version, e.g. \"UMD/hansen/global_forest_change_2025_v1_13\". Carried per feature so a mixed tileset stays attributable.",
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "description": "How this feature was derived — \"JRC GSW YearlyHistory\", or a segmentation model id. Makes the extraction reproducible and auditable.",
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "description": "0–1. Surfaced in the UI rather than smoothed over (A5).",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+
+      "allOf": [
+        {
+          "description": "A state that has ended cannot end before it began.",
+          "if": {
+            "properties": { "valid_to": { "type": "integer" } },
+            "required": ["valid_to"]
+          },
+          "then": {
+            "properties": {
+              "valid_to": { "minimum": 1500 }
+            },
+            "$comment": "Ordering (valid_to >= valid_from) is enforced in code; JSON Schema cannot compare two sibling values."
+          }
+        }
+      ]
+    },
+
+    "featureCollection": {
+      "type": "object",
+      "required": ["type", "features"],
+      "properties": {
+        "type": { "const": "FeatureCollection" },
+        "features": { "type": "array", "items": { "$ref": "#" } }
+      }
+    }
+  }
+}

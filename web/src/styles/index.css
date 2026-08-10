@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-950 text-slate-200 antialiased;
+    /* Documentary, not dashboard — the subject is a changing island. */
+    font-feature-settings: 'tnum' 1;
+  }
+}
