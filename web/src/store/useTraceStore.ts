@@ -44,17 +44,29 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   playing: false,
   selected: null,
 
-  setManifest: (manifest) =>
+  setManifest: (manifest) => {
+    // A manifest with no domains is what a partial pipeline run produces. Spreading an empty
+    // array into Math.max yields -Infinity, which would render a slider labelled "-Infinity"
+    // instead of surfacing the real problem.
+    const latest = manifest.domains.reduce(
+      (max, d) => Math.max(max, d.temporal.end),
+      Number.NEGATIVE_INFINITY,
+    );
+
     set({
       manifest,
-      manifestError: null,
+      manifestError:
+        manifest.domains.length === 0
+          ? 'The manifest contains no domains. Re-run the pipeline: cd pipeline && python -m trace_pipeline.cli all'
+          : null,
       // Everything on by default: the point of the map is the comparison, and a user who has to
       // switch layers on before seeing anything has to already know what to look for.
       activeDomains: new Set(manifest.domains.map((d) => d.id)),
       // Start at the most recent year any domain covers, so the first paint shows the present
       // rather than an arbitrary midpoint.
-      year: Math.max(...manifest.domains.map((d) => d.temporal.end)),
-    }),
+      year: Number.isFinite(latest) ? latest : new Date().getFullYear(),
+    });
+  },
 
   setManifestError: (message) => set({ manifestError: message }),
 

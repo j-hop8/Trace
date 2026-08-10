@@ -61,7 +61,14 @@ export function strokeFor(hue: string, changeType: ChangeType): string {
   return changeType === 'loss' ? '#a3300f' : darken(hue, 0.25);
 }
 
-/** Mix a hex colour toward black. Kept local so no colour utility library is needed. */
+/**
+ * Mix a hex colour toward black. Kept local so no colour utility library is needed.
+ *
+ * Hues reach this from `data/domains.json` — a generated file, not a compile-time constant — so
+ * a malformed value is reachable at runtime. Rather than emit `#NaNNaNNaN` (which MapLibre
+ * rejects, taking the whole layer down with it), fall back to the input unchanged: a
+ * slightly-wrong outline is a far better failure than a missing layer.
+ */
 function darken(hex: string, amount: number): string {
   const value = hex.replace('#', '');
   const full =
@@ -71,6 +78,8 @@ function darken(hex: string, amount: number): string {
           .map((c) => c + c)
           .join('')
       : value;
+
+  if (!/^[0-9a-f]{6}$/i.test(full)) return hex;
 
   const channels = [0, 2, 4].map((i) => {
     const channel = Number.parseInt(full.slice(i, i + 2), 16);
