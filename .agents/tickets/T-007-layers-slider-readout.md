@@ -22,9 +22,10 @@ filtered on the GPU — never swap tile sources per year.
 `props.metric.area_ha` returns undefined and silently renders a dash.
 
 **Acceptance criteria:**
-- [ ] Both domains render, coloured by `colorFor(hue, change_type)` — no colour literals outside
+- [ ] Both domains render, styled by `styleFor(hue, change_type)` — no colour literals outside
       `colors.ts`.
-- [ ] Loss carries the hatch pattern from `patternFor`, so it is not signalled by colour alone.
+- [ ] Loss carries the hatch pattern that `styleFor` returns alongside the colour, so it is never
+      signalled by colour alone.
 - [ ] Dragging the slider animates loss accumulating, with no tile reload flicker.
 - [ ] Slider bounds come from `combinedRange()` and change when domains are toggled — water from
       1984, forest from 2000.

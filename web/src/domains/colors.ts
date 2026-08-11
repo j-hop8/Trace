@@ -24,41 +24,41 @@ export const LOSS = '#e04b28';
 /** Stable — present in both epochs. Muted so it recedes behind the thing that changed. */
 export const STABLE = '#94a3b8';
 
+/** How a feature is drawn. Colour and its accessible pairing always travel together. */
+export interface FeatureStyle {
+  /** Fill colour. */
+  color: string;
+  /**
+   * Fill pattern paired with the colour. `null` means a solid fill is correct — stable and gain
+   * are not the states a colourblind user would misread as each other.
+   */
+  pattern: 'hatch' | null;
+  /** Outline colour, for crisp edges against the muted basemap. */
+  stroke: string;
+}
+
 /**
- * The colour a feature should be drawn in.
+ * The complete style for a feature — the only drawing decision in the app.
+ *
+ * A5 requires that loss is never signalled by colour alone. This returns one object rather than
+ * exposing colour and pattern as separate calls, because a split API lets a caller take the loss
+ * red and skip the hatch, which is precisely the accessibility failure the rule exists to stop.
+ * Making that impossible is a type-level guarantee; a convention that callers "should also call
+ * patternFor" is not.
  *
  * @param hue        The domain's extent colour, from the manifest — never hardcoded here.
  * @param changeType The universal change signal.
  */
-export function colorFor(hue: string, changeType: ChangeType): string {
+export function styleFor(hue: string, changeType: ChangeType): FeatureStyle {
   switch (changeType) {
     case 'loss':
-      return LOSS;
+      return { color: LOSS, pattern: 'hatch', stroke: '#a3300f' };
     // Gain is the domain colour returning — the subject coming back is shown as the subject.
     case 'gain':
-      return hue;
+      return { color: hue, pattern: null, stroke: darken(hue, 0.25) };
     case 'stable':
-      return STABLE;
+      return { color: STABLE, pattern: null, stroke: darken(STABLE, 0.25) };
   }
-}
-
-/**
- * Fill pattern paired with the colour.
- *
- * A5 requires that loss is never signalled by colour alone. Returning the pattern from the same
- * function that decides colour is what stops the two from drifting apart: you cannot pick a
- * colour here without also being handed its accessible pairing.
- *
- * `null` means a solid fill is correct — stable and gain are not the states a colourblind user
- * would misread as each other.
- */
-export function patternFor(changeType: ChangeType): 'hatch' | null {
-  return changeType === 'loss' ? 'hatch' : null;
-}
-
-/** Outline colour. Slightly darkened fill, for crisp edges against the muted basemap. */
-export function strokeFor(hue: string, changeType: ChangeType): string {
-  return changeType === 'loss' ? '#a3300f' : darken(hue, 0.25);
 }
 
 /**

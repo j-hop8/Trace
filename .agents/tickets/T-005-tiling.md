@@ -3,13 +3,14 @@
 
 **Files in scope:**
 - `pipeline/trace_pipeline/tiles.py` (new)
-- `pipeline/trace_pipeline/cli.py` (new)
+- `pipeline/trace_pipeline/cli.py` (extend — the skeleton already exists)
 - `pipeline/tests/test_tiles.py` (new)
 
 **Do NOT touch:** `web/`, `schema/`, extraction modules.
 
-**CLI shape:** `trace extract <domain>` · `trace tiles <domain>` · `trace all`
-(`all` iterates `domains.all_ids()` — never a hardcoded list).
+**CLI shape:** already scaffolded in T-000 with `list` · `extract` · `tiles` · `all`, dispatching
+over `domains.all_ids()` — never a hardcoded list. It imports `tiles` lazily inside `cmd_tiles`,
+so this ticket only has to supply `tiles.build(domain)`; do not restructure the dispatch.
 
 **Tippecanoe invocation notes:**
 - One layer per file, layer name = domain id, so `sourceLayer` in the manifest matches.

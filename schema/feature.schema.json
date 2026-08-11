@@ -18,7 +18,13 @@
       "required": ["type", "coordinates"],
       "properties": {
         "type": {
-          "enum": ["Polygon", "MultiPolygon", "LineString", "MultiLineString", "Point"]
+          "enum": [
+            "Polygon",
+            "MultiPolygon",
+            "LineString",
+            "MultiLineString",
+            "Point"
+          ]
         }
       }
     },
@@ -28,7 +34,17 @@
   "$defs": {
     "properties": {
       "type": "object",
-      "required": ["domain", "valid_from", "change_type", "metric", "source", "method", "confidence"],
+      "$comment": "`valid_to` is required but nullable: an extractor that simply omits it would make every feature look current, which is a silent data error rather than a loud one. `subtype` is genuinely optional — proposal B4 marks it so, and not every domain has a meaningful finer class.",
+      "required": [
+        "domain",
+        "valid_from",
+        "valid_to",
+        "change_type",
+        "metric",
+        "source",
+        "method",
+        "confidence"
+      ],
       "additionalProperties": true,
       "properties": {
         "domain": {

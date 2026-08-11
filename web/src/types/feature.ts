@@ -27,8 +27,14 @@ export interface TraceFeatureProperties {
 
   /** Year the state begins. An integer year — the time slider filters on it numerically. */
   valid_from: number;
-  /** Year the state ends; `null` means still current as of the source's last observed year. */
-  valid_to?: number | null;
+  /**
+   * Year the state ends; `null` means still current as of the source's last observed year.
+   *
+   * Required rather than optional — the key must be present even when the value is null. An
+   * extractor that omits it would make every feature look current, and that failure is invisible
+   * on the map.
+   */
+  valid_to: number | null;
 
   change_type: ChangeType;
   metric: FeatureMetric;

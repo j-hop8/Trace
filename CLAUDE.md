@@ -38,8 +38,11 @@ schema is not, so that migration stays a data load rather than a redesign.
 
 ### Colour is a pure function
 
-`web/src/domains/colors.ts` exports one function, `colorFor(domain, changeType)`. Extent uses the
-domain hue; loss uses the universal red/amber. **No colour literals anywhere else in `web/`.**
+`web/src/domains/colors.ts` exports one function, `styleFor(hue, changeType)`, returning
+`{ color, pattern, stroke }`. Extent uses the domain hue; loss uses the universal red/amber.
+Colour and pattern come back together on purpose — a split API lets a caller take the loss red and
+skip the hatch, which is the exact accessibility failure A5 exists to prevent. **No colour
+literals anywhere else in `web/`.**
 The basemap must show no blue and no green — those hues are reserved to mean "water domain" and
 "forest domain", so the Protomaps style suppresses its own water and vegetation fills.
 
