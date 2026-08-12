@@ -1,0 +1,33 @@
+{
+  "name": "trace-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\""
+  },
+  "dependencies": {
+    "maplibre-gl": "^5",
+    "pmtiles": "^4",
+    "react": "^18",
+    "react-dom": "^18",
+    "zustand": "^4"
+  },
+  "devDependencies": {
+    "@types/geojson": "^7946",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@vitejs/plugin-react": "^4",
+    "autoprefixer": "^10",
+    "postcss": "^8",
+    "prettier": "^3",
+    "tailwindcss": "^3",
+    "typescript": "^5",
+    "vite": "^5"
+  }
+}

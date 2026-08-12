@@ -1,0 +1,135 @@
+<svg viewBox="0 0 960 850" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="850" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="40" y="30" font-size="20" font-weight="700" fill="#0f172a">Trace · 描痕 — system architecture</text>
+
+  <!-- BAND 1: SOURCES -->
+  <text x="40" y="60" font-size="12" font-weight="700" letter-spacing="1.5" fill="#64748b">DATA SOURCES</text>
+  <!-- 4 cards -->
+  <g>
+    <rect x="40" y="70" width="200" height="58" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="52" y="94" font-size="13.5" font-weight="700" fill="#0f172a">Historic maps</text>
+    <text x="52" y="113" font-size="11" fill="#475569">Sinica WMTS tiles</text>
+
+    <rect x="266" y="70" width="200" height="58" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="278" y="94" font-size="13.5" font-weight="700" fill="#0f172a">Aerial photos</text>
+    <text x="278" y="113" font-size="11" fill="#475569">農林航空測量所</text>
+
+    <rect x="492" y="70" width="200" height="58" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="504" y="94" font-size="13.5" font-weight="700" fill="#0f172a">Satellite</text>
+    <text x="504" y="113" font-size="11" fill="#475569">GEE: Landsat / Sentinel</text>
+
+    <rect x="718" y="70" width="200" height="58" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="730" y="94" font-size="13.5" font-weight="700" fill="#0f172a">Sensor &amp; tabular</text>
+    <text x="730" y="113" font-size="11" fill="#475569">CWA · 環境部 · TDX</text>
+  </g>
+
+  <!-- arrows down to extraction -->
+  <line x1="140" y1="128" x2="140" y2="170" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="592" y1="128" x2="592" y2="170" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- BAND 2: EXTRACTION -->
+  <text x="40" y="158" font-size="12" font-weight="700" letter-spacing="1.5" fill="#64748b">EXTRACTION  (the fork)</text>
+
+  <!-- Pipeline A -->
+  <rect x="40" y="172" width="410" height="150" rx="10" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5"/>
+  <text x="58" y="196" font-size="14.5" font-weight="700" fill="#3730a3">Pipeline A — AI Map Reader</text>
+  <text x="58" y="220" font-size="11.5" fill="#334155">georeference → patch → segment</text>
+  <text x="58" y="238" font-size="11.5" fill="#334155">(SAM2 / MapReader-style model)</text>
+  <text x="58" y="256" font-size="11.5" fill="#334155">→ vectorize → human QA</text>
+  <rect x="58" y="270" width="330" height="22" rx="11" fill="#e0e7ff"/>
+  <text x="70" y="285" font-size="10.5" font-weight="600" fill="#3730a3">pre-1972 + human features (rail, place names)</text>
+  <text x="58" y="312" font-size="10.5" font-style="italic" fill="#6366f1">↺ human annotation feeds model training</text>
+
+  <!-- Pipeline B -->
+  <rect x="510" y="172" width="410" height="150" rx="10" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5"/>
+  <text x="528" y="196" font-size="14.5" font-weight="700" fill="#065f46">Pipeline B — Imagery Classifier</text>
+  <text x="528" y="220" font-size="11.5" fill="#334155">land-cover + NDVI / NDWI / thermal</text>
+  <text x="528" y="238" font-size="11.5" fill="#334155">(computed in Google Earth Engine)</text>
+  <text x="528" y="256" font-size="11.5" fill="#334155">→ change raster → vectorize</text>
+  <rect x="528" y="270" width="360" height="22" rx="11" fill="#d1fae5"/>
+  <text x="540" y="285" font-size="10.5" font-weight="600" fill="#065f46">post-1972 natural change (forest, coast, heat)</text>
+
+  <!-- converge arrows -->
+  <line x1="245" y1="322" x2="430" y2="360" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="715" y1="322" x2="530" y2="360" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- BAND 3: FEATURE STORE (highlight) -->
+  <text x="40" y="352" font-size="12" font-weight="700" letter-spacing="1.5" fill="#64748b">THE JOIN</text>
+  <rect x="40" y="366" width="880" height="72" rx="10" fill="#fef3c7" stroke="#f59e0b" stroke-width="2.5"/>
+  <text x="480" y="392" font-size="15.5" font-weight="700" fill="#92400e" text-anchor="middle">Unified spatiotemporal feature store · PostGIS</text>
+  <text x="480" y="412" font-size="11.5" fill="#78350f" text-anchor="middle">every feature = geometry + valid-date + domain + source + confidence</text>
+  <text x="480" y="430" font-size="10.5" font-style="italic" fill="#a16207" text-anchor="middle">where Trace goes beyond a layer-toggler · sensor/tabular data enters here already structured</text>
+
+  <line x1="480" y1="438" x2="480" y2="466" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- BAND 4: ANALYSIS -->
+  <text x="40" y="460" font-size="12" font-weight="700" letter-spacing="1.5" fill="#64748b">ANALYSIS ENGINE</text>
+  <g>
+    <rect x="40" y="472" width="280" height="62" rx="8" fill="#faf5ff" stroke="#d8b4fe"/>
+    <text x="54" y="496" font-size="13" font-weight="700" fill="#6b21a8">Change metrics</text>
+    <text x="54" y="516" font-size="11" fill="#475569">Δ area · retreat dist · timeline</text>
+
+    <rect x="340" y="472" width="280" height="62" rx="8" fill="#faf5ff" stroke="#d8b4fe"/>
+    <text x="354" y="496" font-size="13" font-weight="700" fill="#6b21a8">Cross-layer correlation</text>
+    <text x="354" y="516" font-size="11" fill="#475569">urban × forest · subsidence × 魚塭</text>
+
+    <rect x="640" y="472" width="280" height="62" rx="8" fill="#faf5ff" stroke="#d8b4fe"/>
+    <text x="654" y="496" font-size="13" font-weight="700" fill="#6b21a8">Curated stories</text>
+    <text x="654" y="516" font-size="11" fill="#475569">pre-computed narratives</text>
+  </g>
+
+  <line x1="480" y1="534" x2="480" y2="562" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- BAND 5: SERVING -->
+  <text x="40" y="556" font-size="12" font-weight="700" letter-spacing="1.5" fill="#64748b">SERVING  (near-serverless)</text>
+  <g>
+    <rect x="40" y="568" width="200" height="56" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="52" y="591" font-size="13" font-weight="700" fill="#0f172a">PMTiles</text>
+    <text x="52" y="610" font-size="11" fill="#475569">vector · one file</text>
+
+    <rect x="266" y="568" width="200" height="56" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="278" y="591" font-size="13" font-weight="700" fill="#0f172a">COG + titiler</text>
+    <text x="278" y="610" font-size="11" fill="#475569">raster tiles</text>
+
+    <rect x="492" y="568" width="200" height="56" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="504" y="591" font-size="13" font-weight="700" fill="#0f172a">Analysis API</text>
+    <text x="504" y="610" font-size="11" fill="#475569">queries · joins</text>
+
+    <rect x="718" y="568" width="200" height="56" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="730" y="591" font-size="13" font-weight="700" fill="#0f172a">WMTS proxy</text>
+    <text x="730" y="610" font-size="11" fill="#475569">Sinica basemaps</text>
+  </g>
+
+  <line x1="480" y1="624" x2="480" y2="652" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- BAND 6: FRONTEND -->
+  <text x="40" y="646" font-size="12" font-weight="700" letter-spacing="1.5" fill="#64748b">FRONTEND</text>
+  <rect x="40" y="658" width="880" height="90" rx="10" fill="#1e293b"/>
+  <text x="60" y="686" font-size="15.5" font-weight="700" fill="#ffffff">Trace — web app  ·  MapLibre GL + deck.gl</text>
+  <g font-size="11" fill="#e2e8f0">
+    <rect x="60" y="702" width="160" height="26" rx="13" fill="#334155"/>
+    <text x="140" y="719" text-anchor="middle">time slider + animation</text>
+    <rect x="232" y="702" width="150" height="26" rx="13" fill="#334155"/>
+    <text x="307" y="719" text-anchor="middle">swipe / spyglass</text>
+    <rect x="394" y="702" width="120" height="26" rx="13" fill="#334155"/>
+    <text x="454" y="719" text-anchor="middle">layer toggles</text>
+    <rect x="526" y="702" width="170" height="26" rx="13" fill="#334155"/>
+    <text x="611" y="719" text-anchor="middle">cross-analysis panel</text>
+    <rect x="708" y="702" width="110" height="26" rx="13" fill="#334155"/>
+    <text x="763" y="719" text-anchor="middle">story mode</text>
+  </g>
+
+  <line x1="480" y1="748" x2="480" y2="776" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- USER OUTCOME -->
+  <rect x="300" y="782" width="360" height="44" rx="22" fill="#0f172a"/>
+  <text x="480" y="809" font-size="13.5" font-weight="700" fill="#fbbf24" text-anchor="middle">See what changed · how much · and why</text>
+</svg>
