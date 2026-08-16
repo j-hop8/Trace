@@ -15,10 +15,33 @@ so this ticket only has to supply `tiles.build(domain)`; do not restructure the 
 **Tippecanoe invocation notes:**
 - One layer per file, layer name = domain id, so `sourceLayer` in the manifest matches.
 - **Do not** use `--drop-densest-as-needed` or `--drop-smallest-as-needed`. Dropping features
-  silently changes the area totals the UI reports as fact. Use `-zg` with an explicit max zoom
-  and let file size be what it is; if it is too large, raise `MIN_PATCH_HA` deliberately and say
-  so in the caveat rather than letting the tiler quietly discard data.
+  silently changes the area totals the UI reports as fact. Set an explicit zoom range and let file
+  size be what it is; if it is too large, raise `MIN_PATCH_PIXELS` deliberately and restate the
+  retained percentage, rather than letting the tiler quietly discard data.
+- Three defaults must also be disabled, or tippecanoe discards data without being asked:
+  `--no-feature-limit` (200k features/tile), `--no-tile-size-limit` (500 KB/tile), and
+  `--no-tiny-polygon-reduction` (merges sub-pixel polygons into dots at low zoom).
 - Preserve all attributes; the readout depends on them.
+
+## Findings from the first real run
+
+**The staging filename decides the output format.** Tippecanoe picks MBTiles vs PMTiles from the
+output *extension*, so staging as `forest.pmtiles.partial` produced an MBTiles database that was
+then renamed to `.pmtiles` — the wrong format under the right name, which every later step would
+have trusted. Staging is now `forest.partial.pmtiles`, and the built archive's magic bytes are
+checked before the move.
+
+**Two attribute changes matter for T-007:**
+
+- `metric` survives as a **JSON string** (`'{"area_ha":0.1397}'`), not a nested object and not
+  flattened to `metric.area_ha`. MVT has no nested values. `readMetric()` in
+  `web/src/types/feature.ts` currently handles flattened and nested only, so it would return
+  `undefined` and the readout would silently show a dash.
+- `valid_to` is **absent from the tiles entirely**, because every forest value is null and
+  tippecanoe drops null attributes. A filter referencing it must treat *missing* as "still
+  current" rather than assuming the key exists.
+
+**Result:** 91,087 features → 13.9 MB, z5–14, tilestats count verified equal to the source.
 
 **Acceptance criteria:**
 - [ ] `trace all` produces `data/<domain>.pmtiles` for every registered domain, plus
