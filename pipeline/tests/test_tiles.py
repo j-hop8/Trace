@@ -77,6 +77,29 @@ def test_output_path_matches_the_manifest_url(tmp_path, monkeypatch):
     assert tiles.pmtiles_path("forest").name == "forest.pmtiles"
 
 
+def test_a_failed_build_leaves_no_staging_file(tmp_path, monkeypatch, forest_domain):
+    """Whatever goes wrong, the next run must not find a half-written archive to trust."""
+    monkeypatch.setattr(extract, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tiles.shutil, "which", lambda _: "/usr/bin/tippecanoe")
+
+    source = tmp_path / "forest.geojson"
+    source.write_text(json.dumps({"type": "FeatureCollection", "features": [{}, {}]}))
+
+    staging = tmp_path / "forest.partial.pmtiles"
+
+    def fake_run(*_args, **_kwargs):
+        staging.write_bytes(b"partial output")
+        raise RuntimeError("something nobody anticipated")
+
+    monkeypatch.setattr(tiles.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError):
+        tiles.build(forest_domain)
+
+    assert not staging.exists(), "an unexpected failure must still clean up the staging file"
+    assert not tiles.pmtiles_path("forest").exists()
+
+
 # --- post-conditions on the built archive -----------------------------------------------------
 
 
@@ -135,6 +158,30 @@ def test_verify_warns_but_passes_without_tilestats(tmp_path, monkeypatch, capsys
 
     tiles.verify(archive, "forest", 91_087)
     assert "unverified" in capsys.readouterr().out
+
+
+def test_layer_stats_returns_none_when_pmtiles_is_not_installed(tmp_path, monkeypatch):
+    """`check=False` does not cover a missing binary — subprocess.run still raises.
+
+    Unhandled, that escapes verify(), propagates out of build(), and strands the staging file on
+    a machine whose only fault is lacking an optional tool. The verifier must degrade to
+    "unchecked", never take down a build whose output is fine.
+    """
+
+    def missing_binary(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "pmtiles")
+
+    monkeypatch.setattr(tiles.subprocess, "run", missing_binary)
+    assert tiles._layer_stats(tmp_path / "forest.pmtiles") is None
+
+
+def test_layer_stats_survives_unparseable_metadata(tmp_path, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "not json at all"
+
+    monkeypatch.setattr(tiles.subprocess, "run", lambda *a, **k: Result())
+    assert tiles._layer_stats(tmp_path / "forest.pmtiles") is None
 
 
 # --- the no-loss contract ----------------------------------------------------------------------

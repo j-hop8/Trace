@@ -117,22 +117,28 @@ def build(domain: Domain) -> Path:
     ]
 
     print(f"[{domain.id}] tiling {expected:,} features…", flush=True)
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    output = f"{result.stdout}\n{result.stderr}"
 
-    if result.returncode != 0:
+    # One cleanup path for every failure, rather than an unlink beside each raise. The acceptance
+    # criterion is that a failed run leaves no half-written archive behind, and that has to hold
+    # for the exceptions nobody anticipated too — not only the ones with a matching `except`.
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        output = f"{result.stdout}\n{result.stderr}"
+
+        if result.returncode != 0:
+            raise TilingError(f"tippecanoe failed for {domain.id}:\n{output.strip()}")
+
+        lost = [line for line in output.splitlines() if any(m in line for m in LOSS_MARKERS)]
+        if lost:
+            raise TilingError(
+                f"tippecanoe discarded features for {domain.id}, so the tiles would disagree "
+                f"with the areas the UI reports:\n  " + "\n  ".join(lost[:5])
+            )
+
+        verify(staging, domain.id, expected)
+    except BaseException:
         staging.unlink(missing_ok=True)
-        raise TilingError(f"tippecanoe failed for {domain.id}:\n{output.strip()}")
-
-    lost = [line for line in output.splitlines() if any(m in line for m in LOSS_MARKERS)]
-    if lost:
-        staging.unlink(missing_ok=True)
-        raise TilingError(
-            f"tippecanoe discarded features for {domain.id}, so the tiles would disagree with "
-            f"the areas the UI reports:\n  " + "\n  ".join(lost[:5])
-        )
-
-    verify(staging, domain.id, expected)
+        raise
 
     os.replace(staging, destination)
     print(f"[{domain.id}] {destination} ({destination.stat().st_size / 1e6:.1f} MB)", flush=True)
@@ -179,13 +185,25 @@ def verify(archive: Path, domain_id: str, expected_features: int) -> None:
 
 
 def _layer_stats(archive: Path) -> tuple[str, int] | None:
-    """(layer name, feature count) from the archive's tilestats, or None if absent."""
-    result = subprocess.run(
-        ["pmtiles", "show", "--metadata", str(archive)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """(layer name, feature count) from the archive's tilestats, or None if unavailable.
+
+    Every failure here returns None rather than raising. This is the *verifier*, and an
+    unavailable verifier must degrade to "unchecked, and said so" — not take down a build whose
+    output is fine. `check=False` alone does not achieve that: `subprocess.run` still raises
+    FileNotFoundError when the binary is missing, which would escape `verify()`, propagate out of
+    `build()`, and leave the staging file behind — breaking the idempotency guarantee for a
+    machine that simply lacks an optional tool.
+    """
+    try:
+        result = subprocess.run(
+            ["pmtiles", "show", "--metadata", str(archive)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+
     if result.returncode != 0:
         return None
 
