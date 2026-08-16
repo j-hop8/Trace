@@ -42,10 +42,39 @@ NATIVE_SCALE_M: Final[int] = 30  # Landsat-derived; both source datasets are 30 
 # Forest is "tree cover >= this percent in 2000". 30% is the Hansen convention.
 TREECOVER_THRESHOLD_PCT: Final[int] = 30
 
-# Minimum mapping unit. Below ~5 pixels (0.45 ha at 30 m) a patch is mostly edge effect, and
-# keeping it would inflate polygon counts without adding signal. This threshold is also what the
-# per-layer resolution caveat in the UI reports, so the honest claim and the code agree.
-MIN_PATCH_HA: Final[float] = 0.5
+# Minimum mapping unit, in PIXELS rather than hectares -- and that distinction is load-bearing.
+#
+# Chosen by measurement, not intuition: an earlier 0.5 ha guess would have discarded 18,759 of the
+# 51,473 ha of tree-cover loss Hansen records for Taiwan 2001-2025, because loss here is dominated
+# by small scattered patches (typhoon, landslide, selective plantation harvest) rather than large
+# clearances. Measured island-wide retention by connected-component size:
+#
+#   >=1 px -> 100.0% retained    >=3 px -> 80.0%
+#   >=2 px ->  89.2%  <- chosen  >=6 px -> 63.6%
+#
+# Dropping isolated single pixels is defensible: they are the likeliest mixed-pixel and
+# geolocation artefacts. Dropping anything larger is discarding signal.
+#
+# Why not express this as an area: Hansen is a 1/4000-degree product, so its pixels are ~27.8 m
+# tall and ~25.5 m wide at Taiwan's latitude -- about 0.071 ha, not the 0.09 that "30 m" implies.
+# A 0.18 ha threshold therefore demands 2.5 pixels and silently behaves as a 3-pixel filter, which
+# is exactly what happened on the first run: 80.3% retained while the caveat claimed 89%.
+# Counting pixels is latitude-independent and matches how the retention above was measured.
+MIN_PATCH_PIXELS: Final[int] = 2
+
+# True geodesic area of one Hansen pixel over Taiwan, measured from the quantization of extracted
+# patch areas on the native grid. Varies ~0.070-0.072 ha between Kenting and Taipei. Used only to
+# express the threshold in human units for the caveat; never for filtering.
+TAIWAN_PIXEL_HA: Final[float] = 0.071
+
+# Share of island-wide Hansen loss area that survives MIN_PATCH_PIXELS: 46,503 of 51,473 ha,
+# 2001-2025 over TAIWAN_BBOX.
+#
+# Measured from the extracted polygons themselves, not from a pre-run raster estimate -- the two
+# differ by ~1 pp because of how connected components resolve at the AOI edge, and the number the
+# UI states as fact has to describe the data that actually shipped. Re-measure from the output
+# whenever the threshold changes.
+FOREST_RETAINED_PCT: Final[float] = 90.3
 
 M2_PER_HA: Final[float] = 10_000.0
 

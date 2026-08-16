@@ -50,8 +50,11 @@ The basemap must show no blue and no green — those hues are reserved to mean "
 
 - Hansen loss is **tree-cover loss**, never "deforestation" — it includes plantation harvest,
   fire, and typhoon damage.
-- Every layer shows its source attribution and its resolution caveat. 30 m means ponds under
-  ~0.5 ha may be missed; say so rather than smoothing it over.
+- Every layer shows its source attribution and its resolution caveat — and the caveat states the
+  **retained percentage**, not just the threshold. "Patches under 0.18 ha are not mapped" sounds
+  negligible; "this shows 89% of measured loss" is the fact a reader needs. Minimum mapping units
+  are set by measuring what they discard, never by intuition: the first guess at 0.5 ha would
+  have dropped a third of Taiwan's recorded tree-cover loss.
 - Loss is never signalled by colour alone — pair with pattern or icon.
 
 ## Dual-Agent Workflow
