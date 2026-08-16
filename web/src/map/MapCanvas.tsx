@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import baseStyle from '@/map/basemap/style.json';
 import { usePmtilesProtocol } from '@/map/usePmtilesProtocol';
+import { useDomainLayers } from '@/map/useDomainLayers';
 
 /**
  * The map canvas.
@@ -27,6 +28,11 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const protocolReady = usePmtilesProtocol();
   const [error, setError] = useState<string | null>(null);
+
+  // Held in state rather than the ref alone, so layer management re-runs once the style is ready.
+  // Adding a source before `load` throws; this is what makes "ready" observable to React.
+  const [readyMap, setReadyMap] = useState<maplibregl.Map | null>(null);
+  useDomainLayers(readyMap);
 
   // The callback is held in a ref rather than read from the effect's closure. A parent passing an
   // inline `onReady={() => …}` creates a new function identity on every render, so depending on it
@@ -63,7 +69,10 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       setError(message);
     });
 
-    map.on('load', () => onReadyRef.current?.(map));
+    map.on('load', () => {
+      setReadyMap(map);
+      onReadyRef.current?.(map);
+    });
 
     // MapLibre measures its container once, at construction. In dev the stylesheet can still be
     // in flight at that moment, so the div is 0x0 and the map silently falls back to its 400x300
@@ -85,6 +94,7 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       observer.disconnect();
       map.remove();
       mapRef.current = null;
+      setReadyMap(null);
     };
     // Deliberately depends on protocolReady alone: the map is constructed once and lives until
     // unmount. onReady is reached through a ref precisely so it cannot appear here.

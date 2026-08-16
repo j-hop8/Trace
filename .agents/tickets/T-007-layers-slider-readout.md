@@ -5,8 +5,28 @@
 - `web/src/domains/layerSpec.ts` (new)
 - `web/src/components/{TimeSlider,LayerToggles,FeatureReadout,Attribution}.tsx` (new)
 - `web/src/map/MapCanvas.tsx` (extend)
+- **Scope amended** — three files beyond the list, with reasons:
+
+  | File | Why |
+  |---|---|
+  | `web/src/map/useDomainLayers.ts` (new) | Layer add/remove/filter has a different lifetime from the map itself. Putting it in `MapCanvas`'s effect would rebuild the map on every layer toggle. |
+  | `web/src/types/feature.ts` | `readMetric()` was wrong — see below. The ticket instructs using it, and as written it returned `undefined` for every tiled feature. |
+  | `web/src/App.tsx` | Has to mount the four new components; the ticket named them without naming their host. |
 
 **Do NOT touch:** `pipeline/`, `schema/`.
+
+## `readMetric` was wrong, and T-005 proved it
+
+This ticket says vector tiles flatten `metric` to `metric.area_ha`. Measured against the real
+tileset, they do not: MVT has no nested values, so tippecanoe serialises the object to a **JSON
+string**, `'{"area_ha":0.1397}'`. The original helper handled flattened and nested shapes only, so
+it returned `undefined` for every tiled feature — and because it returns rather than throws, the
+readout would have shown "—" for a number the pipeline definitely measured, with nothing to say
+the value was lost in transit. All three shapes are handled now.
+
+`valid_to` also never reaches the tiles: every forest value is null and tippecanoe drops null
+attributes. The time filter therefore tests `["!", ["has", "valid_to"]]` rather than comparing the
+key, since a feature whose state has not ended carries no `valid_to` at all.
 
 **The rule that matters:** no component may contain a domain literal. Every layer is built by
 mapping over `manifest.domains`. If a component needs to know something domain-specific, that
