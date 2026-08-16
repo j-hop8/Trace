@@ -27,6 +27,15 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
   const protocolReady = usePmtilesProtocol();
   const [error, setError] = useState<string | null>(null);
 
+  // The callback is held in a ref rather than read from the effect's closure. A parent passing an
+  // inline `onReady={() => …}` creates a new function identity on every render, so depending on it
+  // would tear down and rebuild the whole map each time — and if the callback set parent state,
+  // that becomes an endless reload loop. Map lifetime must not depend on callback identity.
+  const onReadyRef = useRef(onReady);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
   useEffect(() => {
     // The protocol must exist before construction, or the pmtiles:// source silently resolves
     // to nothing and the map renders blank.
@@ -53,7 +62,7 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       setError(message);
     });
 
-    map.on('load', () => onReady?.(map));
+    map.on('load', () => onReadyRef.current?.(map));
 
     // MapLibre measures its container once, at construction. In dev the stylesheet can still be
     // in flight at that moment, so the div is 0x0 and the map silently falls back to its 400x300
@@ -76,7 +85,9 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       map.remove();
       mapRef.current = null;
     };
-  }, [protocolReady, onReady]);
+    // Deliberately depends on protocolReady alone: the map is constructed once and lives until
+    // unmount. onReady is reached through a ref precisely so it cannot appear here.
+  }, [protocolReady]);
 
   return (
     <div className="relative h-full w-full">

@@ -6,16 +6,37 @@ hues stay free to mean "water domain" and "forest domain".
 - `web/src/map/MapCanvas.tsx`, `web/src/map/usePmtilesProtocol.ts` (new)
 - `web/src/map/basemap/style.json` (new)
 - `web/src/App.tsx` (replace the Phase 0 placeholder body)
-- **Scope amended:** `web/public/data` symlink and `web/src/domains/manifest.ts` — see below.
+- **Scope amended** — every file below is outside the original list. Reasons recorded, per group:
+
+  | File(s) | Why it is here |
+  |---|---|
+  | `web/vite-plugin-serve-data.ts`, `web/vite.config.ts` | The app has no route to `data/` otherwise. Started as a `web/public/data` symlink; that broke CI, see below. |
+  | `web/src/domains/manifest.ts` | Its error handling never fired in the one case it was written for. |
+  | `web/scripts/check-basemap-palette.mjs`, `web/package.json`, `.github/workflows/ci.yml` | Mechanical enforcement of this ticket's own acceptance criterion. One coherent addition: the script, the npm script that runs it, and the CI step that makes it binding. Removing any one of the three leaves the rule unenforced. |
+  | `web/src/vite-env.d.ts` | Required for `import.meta.env` to typecheck, which the DEV-guarded map handle uses. Without it `npm run build` fails. |
+  | `.claude/launch.json` | How the dev server is started for verification. Small and tooling-only; drop it if that is preferred. |
 
 **Do NOT touch:** `web/src/domains/colors.ts`, `web/src/types/feature.ts`, `pipeline/`.
 
 ## Two defects to fix here, found by running the app
 
 **The web app has no route to `data/`.** `web/public/` does not exist, so `fetch('/data/domains.json')`
-cannot resolve. A `web/public/data -> ../../data` symlink fixes it and *is* trackable by git
-despite the `data/` ignore rule, because git records the symlink as a file entry rather than a
-directory. Verified.
+cannot resolve.
+
+A `web/public/data -> ../../data` symlink looked like the fix and passed locally — then failed CI.
+`data/` is gitignored, so on a clean checkout the symlink **dangles**, and Vite's build copies
+`publicDir` into the output, dying on `statSync` before producing anything. It only ever worked on
+a machine where `data/` happened to exist.
+
+The deeper problem is that `public/` means "copy into the bundle", and `data/` holds ~100 MB of
+generated tilesets that must never be bundled. So `/data` is served in dev by
+`vite-plugin-serve-data.ts`, and by the host at the same path in production — identical URLs, and
+the build never touches it. Range requests are mandatory there rather than a nicety: PMTiles is a
+single file read by byte range, so without 206 support the basemap cannot load at all.
+
+That plugin answers every `/data` request terminally instead of calling `next()`, because falling
+through hands the request to Vite's SPA fallback, which replies `index.html` at HTTP 200 — the
+exact behaviour that made a missing manifest surface as `Unexpected token '<'`.
 
 **`loadManifest`'s error handling never fires when it matters.** It guards on `response.ok`, but
 Vite's dev server answers unknown paths with `index.html` at **HTTP 200** (SPA fallback). So the
