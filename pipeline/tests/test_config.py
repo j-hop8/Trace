@@ -70,11 +70,45 @@ def test_gsw_fallback_range_is_shorter_than_the_preferred_one():
     assert config.GSW_FIRST_YEAR < config.GSW_V14_LAST_YEAR
 
 
-def test_min_patch_is_a_few_pixels_at_native_scale():
-    """The UI caveat says "under ~0.5 ha may be missed" -- keep code and claim aligned."""
-    pixel_ha = (config.NATIVE_SCALE_M**2) / config.M2_PER_HA  # 0.09 ha at 30 m
-    pixels = config.MIN_PATCH_HA / pixel_ha
-    assert 3 <= pixels <= 12, f"MIN_PATCH_HA is {pixels:.1f} pixels -- suspiciously far from ~5"
+def test_min_patch_drops_only_isolated_single_pixels():
+    """Exactly 2 pixels, measured rather than assumed.
+
+    Taiwan's Hansen loss is small scattered patches, so this threshold decides how much of the
+    data the map may show at all. At 6 px an earlier guess discarded 18,759 of 51,473 ha. Anything
+    above 2 px discards signal, not noise -- so this is pinned, not a range.
+    """
+    assert config.MIN_PATCH_PIXELS == 2, (
+        "changing this changes how much measured loss the map reports; re-measure retention and "
+        "update FOREST_RETAINED_PCT with it"
+    )
+
+
+def test_threshold_is_a_pixel_count_not_an_area():
+    """The distinction is load-bearing, so guard against a well-meaning revert to hectares.
+
+    A Hansen pixel over Taiwan is ~0.071 ha, not the nominal 0.09, so an area threshold rounds up
+    to the next whole pixel and silently drops a band of real data -- it cost a full re-run.
+    """
+    assert isinstance(config.MIN_PATCH_PIXELS, int)
+    assert not hasattr(config, "MIN_PATCH_HA"), (
+        "MIN_PATCH_HA was removed deliberately -- filter on MIN_PATCH_PIXELS instead"
+    )
+
+
+def test_true_pixel_area_is_smaller_than_the_nominal_one():
+    """The whole reason the threshold counts pixels. If these ever match, re-derive the constant."""
+    nominal_ha = (config.NATIVE_SCALE_M**2) / config.M2_PER_HA  # 0.09 at a notional 30 m
+    assert nominal_ha > config.TAIWAN_PIXEL_HA
+    # Hansen's native grid is 1/4000 degree: ~27.8 m tall, ~25.5 m wide at these latitudes.
+    assert 0.068 <= config.TAIWAN_PIXEL_HA <= 0.074
+
+
+def test_retained_percentage_is_plausible_for_the_threshold():
+    """The caveat quotes this figure as fact, so it must not drift away from the threshold."""
+    assert 0 < config.FOREST_RETAINED_PCT <= 100
+    # At >=2 px, measured from the extracted polygons, the value is 90.3%. A wildly different
+    # number here means someone moved the threshold without re-measuring.
+    assert 85 <= config.FOREST_RETAINED_PCT <= 95
 
 
 def test_every_hue_is_a_hex_colour():
