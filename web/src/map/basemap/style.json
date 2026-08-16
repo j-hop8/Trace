@@ -1,0 +1,145 @@
+{
+  "version": 8,
+  "name": "Trace — muted",
+  "metadata": {
+    "trace:note": "Deliberately monochrome. Blue and green are reserved to mean 'water domain' and 'forest domain' (proposal A2), so the basemap may not use them anywhere — including for its own water and vegetation, which is exactly what every off-the-shelf style does. Every colour here satisfies R > G > B: a warm ink grey, never blue-shifted, never green.",
+    "trace:source-build": "protomaps 20260815, Taiwan extract, z0-14",
+    "trace:tile-url-field": "sources.protomaps.url — the single field to repoint at object storage on deploy"
+  },
+  "glyphs": "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "protomaps": {
+      "type": "vector",
+      "url": "pmtiles:///data/taiwan-base.pmtiles",
+      "attribution": "<a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\">&copy; OpenStreetMap contributors</a>"
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#0a0a09"
+      }
+    },
+    {
+      "id": "earth",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "earth",
+      "paint": {
+        "fill-color": "#2a2724"
+      }
+    },
+    {
+      "id": "landcover",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "landcover",
+      "paint": {
+        "fill-color": "#2e2b27",
+        "fill-opacity": 0.7
+      }
+    },
+    {
+      "id": "landuse",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "landuse",
+      "paint": {
+        "fill-color": "#322f2b",
+        "fill-opacity": 0.6
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#131211"
+      },
+      "metadata": {
+        "trace:note": "Darker than land rather than blue. Coastlines still read, because the eye takes the tonal step as a boundary — and the blue stays free to mean the water domain."
+      }
+    },
+    {
+      "id": "water-line",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "water",
+      "filter": ["==", ["geometry-type"], "LineString"],
+      "paint": {
+        "line-color": "#131211",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.4, 14, 1.6]
+      }
+    },
+    {
+      "id": "buildings",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "buildings",
+      "minzoom": 13,
+      "paint": {
+        "fill-color": "#3a3630",
+        "fill-opacity": 0.7
+      }
+    },
+    {
+      "id": "roads-minor",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "roads",
+      "minzoom": 11,
+      "filter": ["!", ["in", ["get", "kind"], ["literal", ["highway", "major_road"]]]],
+      "paint": {
+        "line-color": "#4a4540",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.3, 16, 1.4]
+      }
+    },
+    {
+      "id": "roads-major",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "roads",
+      "filter": ["in", ["get", "kind"], ["literal", ["highway", "major_road"]]],
+      "paint": {
+        "line-color": "#5a544d",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.4, 12, 1.3, 16, 3]
+      }
+    },
+    {
+      "id": "boundaries",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "boundaries",
+      "paint": {
+        "line-color": "#5f594f",
+        "line-width": 0.7,
+        "line-dasharray": [3, 2]
+      }
+    },
+    {
+      "id": "place-labels",
+      "type": "symbol",
+      "source": "protomaps",
+      "source-layer": "places",
+      "filter": ["in", ["get", "kind"], ["literal", ["locality", "region", "country"]]],
+      "layout": {
+        "text-field": ["coalesce", ["get", "name:zh-Hant"], ["get", "name"]],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 5, 10, 12, 14],
+        "text-max-width": 8
+      },
+      "paint": {
+        "text-color": "#a9a094",
+        "text-halo-color": "#0a0a09",
+        "text-halo-width": 1.2,
+        "text-opacity": 0.85
+      },
+      "metadata": {
+        "trace:note": "Dimmed on purpose. Labels orient the reader; they must never compete with the data layers, which carry the actual argument."
+      }
+    }
+  ]
+}

@@ -27,6 +27,9 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
+      # The basemap may not use blue or green — those hues mean "water domain" and "forest
+      # domain". Invisible in review, so it is checked mechanically.
+      - run: npm run check:palette
       - run: npm run build
 
   pipeline:

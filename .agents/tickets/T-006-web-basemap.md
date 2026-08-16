@@ -6,8 +6,22 @@ hues stay free to mean "water domain" and "forest domain".
 - `web/src/map/MapCanvas.tsx`, `web/src/map/usePmtilesProtocol.ts` (new)
 - `web/src/map/basemap/style.json` (new)
 - `web/src/App.tsx` (replace the Phase 0 placeholder body)
+- **Scope amended:** `web/public/data` symlink and `web/src/domains/manifest.ts` — see below.
 
 **Do NOT touch:** `web/src/domains/colors.ts`, `web/src/types/feature.ts`, `pipeline/`.
+
+## Two defects to fix here, found by running the app
+
+**The web app has no route to `data/`.** `web/public/` does not exist, so `fetch('/data/domains.json')`
+cannot resolve. A `web/public/data -> ../../data` symlink fixes it and *is* trackable by git
+despite the `data/` ignore rule, because git records the symlink as a file entry rather than a
+directory. Verified.
+
+**`loadManifest`'s error handling never fires when it matters.** It guards on `response.ok`, but
+Vite's dev server answers unknown paths with `index.html` at **HTTP 200** (SPA fallback). So the
+guard passes, `response.json()` chokes on `<!doctype`, and the user gets
+`Unexpected token '<', "<!doctype "... is not valid JSON` instead of the written-for-this-exact-case
+message telling them to run the pipeline. Detect a non-JSON response explicitly.
 
 **Why not OpenFreeMap:** the restyle *is* the work, and OpenFreeMap (OpenMapTiles schema) and
 Protomaps use incompatible layer names — staging through it means doing the restyle twice.
