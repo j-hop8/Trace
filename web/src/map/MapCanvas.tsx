@@ -8,9 +8,10 @@ import { usePmtilesProtocol } from '@/map/usePmtilesProtocol';
 /**
  * The map canvas.
  *
- * Knows nothing about domains — no `water`, no `forest`, no per-domain branch. Data layers are
+ * Knows nothing about any specific domain: no domain names, no per-domain branch. Data layers are
  * added by iterating the manifest (T-007), so adding a domain never touches this file. That is
- * the invariant that keeps domains modular rather than hardcoded.
+ * the invariant that keeps domains modular rather than hardcoded — and it is stated without
+ * naming an example, so a grep for domain literals stays a valid check on this file.
  */
 
 /** Taiwan, framed to fill the viewport on first paint. */

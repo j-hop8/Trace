@@ -45,10 +45,12 @@ export interface DomainManifest {
 /** The manifest version this build understands. A bump means the tile contract changed. */
 const SUPPORTED_VERSION = 1;
 
-/** What to tell someone whose manifest is missing. The fix is always the same. */
+/** What to tell someone whose manifest is missing. The fix is almost always the first line. */
 const MISSING_MANIFEST_HINT =
   'Generate it with:  cd pipeline && .venv/bin/python -m trace_pipeline.cli all\n' +
-  'If it already exists at the repo root, check that web/public/data links to ../../data.';
+  'If it already exists in the repo-root data/ directory, the dev server is not serving /data — ' +
+  'restart it so the serve-data plugin in vite.config.ts is applied. In production, /data is ' +
+  'served by the host.';
 
 export async function loadManifest(url = '/data/domains.json'): Promise<DomainManifest> {
   const response = await fetch(url);
