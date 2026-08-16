@@ -4,7 +4,15 @@ Earth Engine asset IDs drift between versions. They live here and nowhere else, 
 update is a one-line change rather than a grep across modules.
 """
 
+from pathlib import Path
 from typing import Final
+
+# --- Paths ------------------------------------------------------------------------------------
+# trace_pipeline/config.py -> pipeline/ -> repo root
+REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
+SCHEMA_PATH: Final[Path] = REPO_ROOT / "schema" / "feature.schema.json"
+DATA_DIR: Final[Path] = REPO_ROOT / "data"
+MANIFEST_PATH: Final[Path] = DATA_DIR / "domains.json"
 
 # --- Area of interest -------------------------------------------------------------------------
 # Main island + Penghu. Kinmen (~118.3E) and Matsu (~26.2N) are deliberately excluded: including

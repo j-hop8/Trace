@@ -1,0 +1,29 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [121.2158, 24.9931],
+            [121.2172, 24.9931],
+            [121.2172, 24.9942],
+            [121.2158, 24.9931]
+          ]
+        ]
+      },
+      "properties": {
+        "domain": "Water",
+        "valid_from": 1990,
+        "valid_to": 2008,
+        "change_type": "deforestation",
+        "metric": { "area_ha": 3.2 },
+        "source": "JRC/GSW1_4/YearlyHistory",
+        "method": "JRC GSW YearlyHistory",
+        "confidence": 1.4
+      }
+    }
+  ]
+}
