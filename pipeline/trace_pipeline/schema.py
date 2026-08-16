@@ -15,11 +15,14 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
 import jsonschema
 
-from trace_pipeline import config
+# trace_pipeline/schema.py -> pipeline/ -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCHEMA_PATH = REPO_ROOT / "schema" / "feature.schema.json"
 
 ChangeType = Literal["gain", "loss", "stable"]
 
@@ -52,7 +55,7 @@ class FeatureValidationError(ValueError):
 @lru_cache(maxsize=1)
 def load_schema() -> dict[str, Any]:
     """The authoritative JSON Schema, read once and cached."""
-    with config.SCHEMA_PATH.open(encoding="utf-8") as handle:
+    with SCHEMA_PATH.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -85,6 +88,16 @@ def required_property_names() -> list[str]:
     return list(load_schema()["$defs"]["properties"]["required"])
 
 
+@lru_cache(maxsize=1)
+def spine_field_names() -> frozenset[str]:
+    """Every property name the B4 spine owns, including the optional ones.
+
+    Derived from the schema rather than hardcoded so a new spine field is automatically protected
+    from being shadowed by ``TraceFeature.extra``.
+    """
+    return frozenset(load_schema()["$defs"]["properties"]["properties"])
+
+
 @dataclass(frozen=True)
 class TraceFeature:
     """One dated, measured feature -- the unit the whole product is built from.
@@ -104,11 +117,25 @@ class TraceFeature:
     confidence: float
     subtype: str | None = None
     id: str | int | None = None
-    #: Anything a domain wants to carry that the spine does not define. Kept separate so the
-    #: required fields cannot be shadowed by a stray key.
+    #: Domain-specific extras the spine does not define — e.g. water's GSW transition class.
+    #: Keys colliding with a spine field are rejected in ``__post_init__``; see
+    #: :func:`spine_field_names` for why that check has to exist.
     extra: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # Reject collisions before building properties. `extra` is merged last, so a colliding
+        # key would otherwise overwrite a typed field: a feature constructed as `water` could
+        # emit `forest` into the tiles, and it would pass validation because `forest` is a legal
+        # value. Silent misattribution is far worse than a loud constructor failure.
+        collisions = sorted(set(self.extra) & spine_field_names())
+        if collisions:
+            raise FeatureValidationError(
+                [
+                    f"feature: extra may not contain spine field(s) {', '.join(collisions)} -- "
+                    f"set them as arguments instead of smuggling them through extra"
+                ]
+            )
+
         props = self.properties()
         problems = [_describe(e, "feature") for e in _properties_validator().iter_errors(props)]
         problems.extend(_check_properties(props, where="feature"))
@@ -117,21 +144,26 @@ class TraceFeature:
 
     def properties(self) -> dict[str, Any]:
         """The GeoJSON ``properties`` object for this feature."""
-        props: dict[str, Any] = {
-            "domain": self.domain,
-            "valid_from": self.valid_from,
-            "valid_to": self.valid_to,
-            "change_type": self.change_type,
-            "metric": dict(self.metric),
-            "source": self.source,
-            "method": self.method,
-            "confidence": self.confidence,
-        }
+        # Extras first, so the authoritative fields win even if the collision guard above were
+        # ever bypassed. Belt and braces: the guard gives the good error, this ordering makes
+        # silent corruption impossible rather than merely unlikely.
+        props: dict[str, Any] = dict(self.extra)
+        props.update(
+            {
+                "domain": self.domain,
+                "valid_from": self.valid_from,
+                "valid_to": self.valid_to,
+                "change_type": self.change_type,
+                "metric": dict(self.metric),
+                "source": self.source,
+                "method": self.method,
+                "confidence": self.confidence,
+            }
+        )
         # Only emit subtype when there is one. The schema marks it optional (B4), so a null
         # placeholder on every forest patch would be noise in every tile.
         if self.subtype is not None:
             props["subtype"] = self.subtype
-        props.update(self.extra)
         return props
 
     def to_geojson_feature(self, geometry: Mapping[str, Any]) -> dict[str, Any]:

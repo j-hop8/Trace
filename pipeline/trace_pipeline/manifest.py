@@ -14,9 +14,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from trace_pipeline import config
+from trace_pipeline.schema import REPO_ROOT
 
 if TYPE_CHECKING:
     from trace_pipeline.domains.base import Domain
+
+DATA_DIR = REPO_ROOT / "data"
+MANIFEST_PATH = DATA_DIR / "domains.json"
 
 #: Root-relative so the same manifest works under `npm run dev` and on object storage. The
 #: pmtiles:// prefix is what registers the file with MapLibre's PMTiles protocol handler.
@@ -74,7 +78,7 @@ def _check(entries: Sequence[dict[str, Any]]) -> None:
 
 def write(domains: Sequence[Domain], path: Path | None = None) -> Path:
     """Write the manifest to disk, creating the data directory if needed."""
-    destination = path or config.MANIFEST_PATH
+    destination = path or MANIFEST_PATH
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     payload = build(domains)
