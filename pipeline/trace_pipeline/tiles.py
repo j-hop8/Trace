@@ -42,7 +42,13 @@ NO_LOSS_FLAGS = [
 #: size lever that costs no data.
 SIMPLIFICATION = 4
 
-#: Substrings tippecanoe prints when it has thrown data away. Treated as failures.
+#: Substrings tippecanoe prints when it has thrown data away.
+#:
+#: An *early warning*, never the guarantee. Diagnostic text is not a stable correctness API: the
+#: wording can change between releases and a discard mode nobody has seen yet would print
+#: something not in this list. The guarantee is the tilestats count in :func:`verify`, which
+#: compares what landed in the archive against what went in. This just fails faster, with a more
+#: specific message, in the cases it does recognise.
 LOSS_MARKERS = ("dropping", "dropped", "Try using --drop", "polygon dust")
 
 
@@ -58,6 +64,27 @@ def require_tippecanoe() -> str:
             "  macOS:  brew install tippecanoe\n"
             "  Linux:  build from https://github.com/felt/tippecanoe\n"
             "It converts the extracted GeoJSON into the PMTiles the web app reads."
+        )
+    return path
+
+
+def require_pmtiles() -> str:
+    """The `pmtiles` CLI, required — not optional.
+
+    It is how the built archive's feature count is read back, and that count is the only real
+    guarantee that nothing was discarded. Treating it as optional would mean a machine without it
+    produces tiles that pass without the count ever being checked, which is precisely the silent
+    failure this module exists to prevent. Better to refuse to build than to build unverified.
+    """
+    path = shutil.which("pmtiles")
+    if not path:
+        raise TilingError(
+            "pmtiles is not on PATH, so the tiled feature count cannot be verified.\n"
+            "  macOS:  brew install pmtiles\n"
+            "  any OS: GOBIN=/usr/local/bin go install github.com/protomaps/go-pmtiles@latest\n"
+            "          (installs as `go-pmtiles`; symlink or rename it to `pmtiles`)\n"
+            "This is required rather than optional: the count check is what proves the tiler did "
+            "not silently discard features, and the map's area totals depend on it."
         )
     return path
 
@@ -80,6 +107,8 @@ def count_features(geojson: Path) -> int:
 def build(domain: Domain) -> Path:
     """Build `data/<domain>.pmtiles`. Returns the path written."""
     tippecanoe = require_tippecanoe()
+    # Checked up front, not after a 40-second tiling run, so a missing tool fails immediately.
+    require_pmtiles()
 
     source = extract.geojson_path(domain.id)
     if not source.exists():
@@ -166,8 +195,13 @@ def verify(archive: Path, domain_id: str, expected_features: int) -> None:
 
     stats = _layer_stats(archive)
     if stats is None:
-        print(f"[{domain_id}] warning: tileset carries no tilestats; count unverified", flush=True)
-        return
+        archive.unlink(missing_ok=True)
+        raise TilingError(
+            f"could not read the feature count back from {archive.name}. The build is refused "
+            f"rather than passed unverified: an archive that silently lost features is exactly "
+            f"what this check exists to catch, and 'tippecanoe printed nothing alarming' is not "
+            f"evidence — its diagnostics are not a correctness API."
+        )
 
     layer, count = stats
     if layer != domain_id:

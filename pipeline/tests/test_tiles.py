@@ -151,13 +151,43 @@ def test_verify_passes_when_everything_matches(tmp_path, monkeypatch):
     assert archive.exists()
 
 
-def test_verify_warns_but_passes_without_tilestats(tmp_path, monkeypatch, capsys):
-    """Absent stats must not fail the build — but it must say the count went unchecked."""
+def test_verify_refuses_a_build_it_cannot_check(tmp_path, monkeypatch):
+    """Unverifiable is a failure, not a warning.
+
+    Passing here would let a machine that cannot read the count produce tiles that were never
+    checked — the exact silent failure this module exists to prevent. "Tippecanoe printed nothing
+    alarming" is not evidence: its diagnostics are not a correctness API.
+    """
     monkeypatch.setattr(tiles, "_layer_stats", lambda _: None)
     archive = write_archive(tmp_path / "forest.pmtiles")
 
-    tiles.verify(archive, "forest", 91_087)
-    assert "unverified" in capsys.readouterr().out
+    with pytest.raises(tiles.TilingError, match="could not read the feature count"):
+        tiles.verify(archive, "forest", 91_087)
+    assert not archive.exists()
+
+
+def test_pmtiles_is_required_not_optional(monkeypatch):
+    """It is how the count is read back, so a machine without it must not build at all."""
+    monkeypatch.setattr(tiles.shutil, "which", lambda name: None if name == "pmtiles" else "/bin/x")
+
+    with pytest.raises(tiles.TilingError, match="cannot be verified"):
+        tiles.require_pmtiles()
+
+
+def test_missing_pmtiles_fails_before_the_tiling_run(monkeypatch, tmp_path, forest_domain):
+    """Fail in a second, not after 40 seconds of tiling that is about to be thrown away."""
+    monkeypatch.setattr(extract, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        tiles.shutil, "which", lambda name: None if name == "pmtiles" else "/bin/tippecanoe"
+    )
+
+    def must_not_run(*_a, **_k):
+        raise AssertionError("tippecanoe ran despite pmtiles being unavailable")
+
+    monkeypatch.setattr(tiles.subprocess, "run", must_not_run)
+
+    with pytest.raises(tiles.TilingError, match="cannot be verified"):
+        tiles.build(forest_domain)
 
 
 def test_layer_stats_returns_none_when_pmtiles_is_not_installed(tmp_path, monkeypatch):

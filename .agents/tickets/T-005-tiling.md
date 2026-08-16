@@ -5,6 +5,7 @@
 - `pipeline/trace_pipeline/tiles.py` (new)
 - `pipeline/trace_pipeline/cli.py` (extend — the skeleton already exists)
 - `pipeline/tests/test_tiles.py` (new)
+- this ticket file — findings from the run are recorded here as the work proceeds
 
 **Do NOT touch:** `web/`, `schema/`, extraction modules.
 
