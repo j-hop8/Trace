@@ -45,16 +45,45 @@ export interface DomainManifest {
 /** The manifest version this build understands. A bump means the tile contract changed. */
 const SUPPORTED_VERSION = 1;
 
+/** What to tell someone whose manifest is missing. The fix is almost always the first line. */
+const MISSING_MANIFEST_HINT =
+  'Generate it with:  cd pipeline && .venv/bin/python -m trace_pipeline.cli all\n' +
+  'If it already exists in the repo-root data/ directory, the dev server is not serving /data — ' +
+  'restart it so the serve-data plugin in vite.config.ts is applied. In production, /data is ' +
+  'served by the host.';
+
 export async function loadManifest(url = '/data/domains.json'): Promise<DomainManifest> {
   const response = await fetch(url);
+
   if (!response.ok) {
     throw new Error(
-      `Could not load the domain manifest from ${url} (${response.status}). ` +
-        `Run the pipeline first: cd pipeline && python -m trace_pipeline.cli all`,
+      `Could not load the domain manifest from ${url} (${response.status}).\n` +
+        MISSING_MANIFEST_HINT,
     );
   }
 
-  const manifest = (await response.json()) as DomainManifest;
+  // A 404 is not how a missing manifest usually presents. Vite's dev server answers unknown
+  // paths with index.html at HTTP 200 — the SPA fallback — so `response.ok` is true and the
+  // check above sails past. Without this, the failure surfaces as
+  // `Unexpected token '<', "<!doctype "... is not valid JSON`, which tells the reader nothing
+  // about what is actually wrong. Static hosts behave the same way for missing files.
+  const body = await response.text();
+  if (body.trimStart().startsWith('<')) {
+    throw new Error(
+      `${url} returned HTML rather than JSON, which means the file is not being served ` +
+        `(a dev server answering with index.html, not a real manifest).\n${MISSING_MANIFEST_HINT}`,
+    );
+  }
+
+  let manifest: DomainManifest;
+  try {
+    manifest = JSON.parse(body) as DomainManifest;
+  } catch (error) {
+    throw new Error(
+      `${url} is not valid JSON: ${error instanceof Error ? error.message : String(error)}\n` +
+        `The file exists but is malformed — regenerate it.`,
+    );
+  }
 
   if (manifest.version !== SUPPORTED_VERSION) {
     throw new Error(
