@@ -1,0 +1,29 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [121.2158, 24.9931],
+            [121.2172, 24.9931],
+            [121.2172, 24.9942],
+            [121.2158, 24.9931]
+          ]
+        ]
+      },
+      "properties": {
+        "domain": "water",
+        "valid_from": 2008,
+        "valid_to": 1990,
+        "change_type": "loss",
+        "metric": { "area_ha": 3.2 },
+        "source": "JRC/GSW1_4/YearlyHistory",
+        "method": "JRC GSW YearlyHistory",
+        "confidence": 0.85
+      }
+    }
+  ]
+}
