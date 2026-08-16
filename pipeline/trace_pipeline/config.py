@@ -47,10 +47,15 @@ TREECOVER_THRESHOLD_PCT: Final[int] = 30
 # Chosen by measurement, not intuition: an earlier 0.5 ha guess would have discarded 18,759 of the
 # 51,473 ha of tree-cover loss Hansen records for Taiwan 2001-2025, because loss here is dominated
 # by small scattered patches (typhoon, landslide, selective plantation harvest) rather than large
-# clearances. Measured island-wide retention by connected-component size:
+# clearances. Island-wide retention by connected-component size, estimated from the raster before
+# extraction -- these are the figures the threshold was chosen on:
 #
 #   >=1 px -> 100.0% retained    >=3 px -> 80.0%
 #   >=2 px ->  89.2%  <- chosen  >=6 px -> 63.6%
+#
+# FOREST_RETAINED_PCT below is deliberately NOT taken from this table; it is re-measured from the
+# extracted polygons, which land ~1 pp higher. The table justifies the choice, the constant
+# describes the shipped data, and only the constant is quoted to users.
 #
 # Dropping isolated single pixels is defensible: they are the likeliest mixed-pixel and
 # geolocation artefacts. Dropping anything larger is discarding signal.

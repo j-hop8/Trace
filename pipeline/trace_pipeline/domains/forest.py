@@ -93,9 +93,9 @@ class ForestDomain(Domain):
 
     @property
     def caveat(self) -> str:
-        # The retained percentage is the part that matters. "Patches under 0.18 ha are not
-        # mapped" sounds negligible; "this shows 89% of measured loss" is the fact a reader
-        # needs to judge the number they are looking at.
+        # The retained percentage is the part that matters. A bare threshold sounds negligible;
+        # "this shows about 90% of measured loss" is the fact a reader needs to judge the number
+        # in front of them. Both figures are interpolated from config so they cannot go stale.
         return (
             "Tree-cover loss, not deforestation: this includes plantation harvest, fire, and "
             "typhoon damage as well as permanent clearance. Baseline is ≥"
@@ -129,9 +129,10 @@ class ForestDomain(Domain):
         # Sieve by connected-component size, before vectorizing.
         #
         # Filtering on hectares instead looks equivalent and is not: a Hansen pixel over Taiwan is
-        # ~0.082 ha rather than the nominal 0.09, so an area threshold quietly rounds up to the
-        # next whole pixel count and drops a band of real data. Counting pixels is
-        # latitude-independent and matches how the retention figure in the caveat was measured.
+        # ~0.071 ha (config.TAIWAN_PIXEL_HA) rather than the nominal 0.09, so an area threshold
+        # quietly rounds up to the next whole pixel count and drops a band of real data. Counting
+        # pixels is latitude-independent and matches how the caveat's retention figure was
+        # measured.
         # eightConnected must agree with reduceToVectors below, or components differ.
         component_size = patches.connectedPixelCount(maxSize=16, eightConnected=False)
         kept = patches.updateMask(component_size.gte(config.MIN_PATCH_PIXELS))

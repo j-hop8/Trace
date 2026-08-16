@@ -86,7 +86,7 @@ def test_min_patch_drops_only_isolated_single_pixels():
 def test_threshold_is_a_pixel_count_not_an_area():
     """The distinction is load-bearing, so guard against a well-meaning revert to hectares.
 
-    A Hansen pixel over Taiwan is ~0.082 ha, not the nominal 0.09, so an area threshold rounds up
+    A Hansen pixel over Taiwan is ~0.071 ha, not the nominal 0.09, so an area threshold rounds up
     to the next whole pixel and silently drops a band of real data -- it cost a full re-run.
     """
     assert isinstance(config.MIN_PATCH_PIXELS, int)
@@ -106,8 +106,8 @@ def test_true_pixel_area_is_smaller_than_the_nominal_one():
 def test_retained_percentage_is_plausible_for_the_threshold():
     """The caveat quotes this figure as fact, so it must not drift away from the threshold."""
     assert 0 < config.FOREST_RETAINED_PCT <= 100
-    # At >=2 px the measured value is 89.2%. A wildly different number here means someone moved
-    # the threshold without re-measuring.
+    # At >=2 px, measured from the extracted polygons, the value is 90.3%. A wildly different
+    # number here means someone moved the threshold without re-measuring.
     assert 85 <= config.FOREST_RETAINED_PCT <= 95
 
 
