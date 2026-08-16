@@ -51,7 +51,14 @@ Both are fixed by doing the connectivity analysis and the vectorization in Hanse
 projection**, and by filtering on `MIN_PATCH_PIXELS` rather than hectares. `MIN_PATCH_HA` is
 deleted, with a guard test asserting it stays deleted.
 
-**Final measured result:** 91,089 polygons, 46,503 ha = **90.3%** of the 51,473 ha recorded.
+A third, found in review: the Hansen image was not clipped before `connectedPixelCount`, so a
+component straddling the AOI edge counted its outside-Taiwan pixels toward the threshold and was
+then clipped to a lone pixel on output — producing exactly the single-pixel polygons the caveat
+promises are absent. Clip-first (step 1 of the recipe) fixes it; Taiwan sits ~5 km inside every
+bbox edge, so no real coastal component is truncated.
+
+**Final measured result:** 91,087 polygons, 46,503 ha = **90.3%** of the 51,473 ha recorded,
+smallest polygon exactly 2 px, zero sub-threshold polygons.
 
 **Recipe:**
 1. Clip `config.HANSEN_ASSET` to `config.TAIWAN_BBOX`.

@@ -113,7 +113,12 @@ class ForestDomain(Domain):
         """The ee.FeatureCollection of loss polygons for one year, area-tagged and sieved."""
         import ee
 
-        image = ee.Image(config.HANSEN_ASSET)
+        # Clip before anything else, connectivity included. On an unclipped image a component
+        # straddling the AOI edge counts its outside-Taiwan pixels toward MIN_PATCH_PIXELS, then
+        # reduceToVectors clips it to a lone pixel -- so the output contains single-pixel polygons
+        # the caveat promises are not mapped. Taiwan sits ~5 km inside every edge of TAIWAN_BBOX,
+        # so clipping truncates no real coastal component.
+        image = ee.Image(config.HANSEN_ASSET).clip(aoi)
         forest_2000 = image.select("treecover2000").gte(config.TREECOVER_THRESHOLD_PCT)
         lost_this_year = image.select("lossyear").eq(calendar_to_loss_year(calendar_year))
 
