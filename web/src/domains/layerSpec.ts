@@ -25,6 +25,15 @@ const CHANGE_TYPES: ChangeType[] = ['loss', 'gain', 'stable'];
 /** Image id for the diagonal hatch registered on the map. */
 export const HATCH_IMAGE = 'trace-hatch';
 
+/**
+ * The zoom at which a patch stops being sub-pixel and the fill can be seen.
+ *
+ * Measured, not guessed: decoding the built tiles, a median forest-loss ring is 2 tile units
+ * across at z8 (a quarter of a CSS pixel) and 9 at z10; by z12 it is comfortably several pixels.
+ * Below this the outline stands in for the patch — see the `outline` layer.
+ */
+const SCALE_SPLIT_ZOOM = 11;
+
 export const sourceId = (domainId: string) => `trace-${domainId}`;
 export const fillLayerId = (domainId: string) => `trace-${domainId}-fill`;
 export const hatchLayerId = (domainId: string) => `trace-${domainId}-hatch`;
@@ -110,11 +119,27 @@ export function layersFor(entry: DomainManifestEntry, year: number): DomainLayer
     'source-layer': sourceLayer,
     filter,
     paint: {
-      'line-color': styleExpression(entry, 'stroke') as unknown as string,
-      // Hairline until close in: at island view these patches are a few pixels across, and a
-      // heavier outline would swallow the fill and overstate how much ground they cover.
-      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.2, 11, 0.5, 15, 1.2],
-      'line-opacity': 0.8,
+      // Two jobs, split at the zoom where the fill becomes legible.
+      //
+      // A 30 m patch is *sub-pixel* below about z11 — at z8 a typical one is a quarter of a
+      // pixel across, and 17% of them collapse to zero area when quantised onto the tile grid.
+      // A fill cannot draw that, so below the split this line *is* the mark and carries the fill
+      // colour. Above it, the fill takes over and the line goes back to being an edge.
+      'line-color': [
+        'step',
+        ['zoom'],
+        styleExpression(entry, 'color'),
+        SCALE_SPLIT_ZOOM,
+        styleExpression(entry, 'stroke'),
+      ] as unknown as string,
+      // Wide enough to see at island view, then hairline once the fill is doing the work.
+      //
+      // This deliberately overstates area at low zoom: a mark you can see is bigger than the
+      // ground it stands for. That is a legibility floor, not a measurement — the honest
+      // alternative is not a truer dot, it is a blank map, which reads as "no loss here". Areas
+      // are only ever quoted from the feature's own `metric`, never inferred from mark size.
+      'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.2, 9, 1.6, 12, 0.8, 15, 1.2],
+      'line-opacity': 0.85,
     },
   };
 

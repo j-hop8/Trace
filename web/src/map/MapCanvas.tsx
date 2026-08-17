@@ -69,10 +69,30 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       setError(message);
     });
 
-    map.on('load', () => {
+    // `load` is not enough on its own. It fires after the first *render*, and rendering is driven
+    // by requestAnimationFrame — which the browser pauses in a background tab. A map opened in a
+    // tab that never came to the front therefore never reports ready, and because nothing retries,
+    // the domain layers are never added at all: a permanently empty map once you do look at it.
+    //
+    // `styledata` fires on style parse instead, with no paint involved, so it covers that case.
+    //
+    // The guard is `getStyle()` rather than the more obvious `isStyleLoaded()`, because the two
+    // ask different questions. `isStyleLoaded()` is also false while any *tile* is still in
+    // flight, and tile fetches are themselves kicked off by rendering — so in a background tab it
+    // stays false forever and gates the very work it is supposed to unblock. `getStyle()` returns
+    // undefined until the stylesheet is parsed and a value from then on, which is exactly the
+    // precondition addSource/addLayer have. `ready` keeps this a one-shot.
+    let ready = false;
+    const markReady = () => {
+      if (ready || !map.getStyle()) return;
+      ready = true;
+      map.off('styledata', markReady);
       setReadyMap(map);
       onReadyRef.current?.(map);
-    });
+    };
+
+    map.on('styledata', markReady);
+    map.on('load', markReady);
 
     // MapLibre measures its container once, at construction. In dev the stylesheet can still be
     // in flight at that moment, so the div is 0x0 and the map silently falls back to its 400x300
