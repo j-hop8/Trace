@@ -75,6 +75,15 @@ class Domain(ABC):
             aoi: an ee.Geometry to clip to.
         """
 
+    #: Which change types this domain's tileset actually contains.
+    #:
+    #: The web app offers the extent/change view toggle only where both kinds are present, and it
+    #: has to learn that from here rather than by testing for a domain id -- a layer whose UI
+    #: depends on `if (domain === 'forest')` is exactly the coupling the manifest exists to
+    #: prevent. A domain that only has changes to show simply never advertises `extent`, and no
+    #: toggle appears for it.
+    change_types: tuple[str, ...] = ("loss",)
+
     def manifest_entry(self, tiles_url: str) -> dict[str, Any]:
         """Describe this domain for `data/domains.json`.
 
@@ -88,6 +97,7 @@ class Domain(ABC):
             "id": self.id,
             "label": self.label,
             "hue": DOMAIN_HUES[self.id],
+            "changeTypes": list(self.change_types),
             "temporal": {"start": first, "end": last},
             "source": {
                 "name": self.source.name,

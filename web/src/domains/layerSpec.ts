@@ -16,11 +16,11 @@ import type {
   LineLayerSpecification,
 } from 'maplibre-gl';
 
-import { styleFor } from '@/domains/colors';
-import type { DomainManifestEntry } from '@/domains/manifest';
+import { CLEARED, styleFor } from '@/domains/colors';
+import type { DomainManifestEntry, ViewMode } from '@/domains/manifest';
 import type { ChangeType } from '@/types/feature';
 
-const CHANGE_TYPES: ChangeType[] = ['loss', 'gain', 'stable'];
+const CHANGE_TYPES: ChangeType[] = ['extent', 'loss', 'gain', 'stable'];
 
 /** Image id for the diagonal hatch registered on the map. */
 export const HATCH_IMAGE = 'trace-hatch';
@@ -38,10 +38,40 @@ export const sourceId = (domainId: string) => `trace-${domainId}`;
 export const fillLayerId = (domainId: string) => `trace-${domainId}-fill`;
 export const hatchLayerId = (domainId: string) => `trace-${domainId}-hatch`;
 export const outlineLayerId = (domainId: string) => `trace-${domainId}-outline`;
+export const extentFillLayerId = (domainId: string) => `trace-${domainId}-extent-fill`;
+export const extentOutlineLayerId = (domainId: string) => `trace-${domainId}-extent-outline`;
+export const clearedFillLayerId = (domainId: string) => `trace-${domainId}-cleared-fill`;
+export const clearedOutlineLayerId = (domainId: string) => `trace-${domainId}-cleared-outline`;
 
-/** All layer ids a domain owns, in draw order. Used for teardown and hit-testing. */
+/**
+ * All layer ids a domain owns, in draw order. Used for teardown and hit-testing.
+ *
+ * Both views' layers are built once and switched with `visibility` rather than added and removed,
+ * so that flipping the toggle never refetches a tile. Order is load-bearing: the cleared patches
+ * are painted *over* the extent to make holes in it, so they must follow it here.
+ */
 export function layerIdsFor(domainId: string): string[] {
-  return [fillLayerId(domainId), hatchLayerId(domainId), outlineLayerId(domainId)];
+  return [
+    extentFillLayerId(domainId),
+    extentOutlineLayerId(domainId),
+    clearedFillLayerId(domainId),
+    clearedOutlineLayerId(domainId),
+    fillLayerId(domainId),
+    hatchLayerId(domainId),
+    outlineLayerId(domainId),
+  ];
+}
+
+/** Which view each layer belongs to. Drives the visibility switch in `useDomainLayers`. */
+export function layerIdsForMode(domainId: string, mode: ViewMode): string[] {
+  return mode === 'extent'
+    ? [
+        extentFillLayerId(domainId),
+        extentOutlineLayerId(domainId),
+        clearedFillLayerId(domainId),
+        clearedOutlineLayerId(domainId),
+      ]
+    : [fillLayerId(domainId), hatchLayerId(domainId), outlineLayerId(domainId)];
 }
 
 /**
@@ -77,23 +107,144 @@ export function timeFilter(year: number): FilterSpecification {
   ] as FilterSpecification;
 }
 
+/** `change_type` tests, named because they are the difference between the two views. */
+const IS_EXTENT: FilterSpecification = ['==', ['get', 'change_type'], 'extent'];
+const IS_NOT_EXTENT: FilterSpecification = ['!=', ['get', 'change_type'], 'extent'];
+const IS_LOSS: FilterSpecification = ['==', ['get', 'change_type'], 'loss'];
+
+const and = (...clauses: FilterSpecification[]) => ['all', ...clauses] as FilterSpecification;
+
+/**
+ * The width ramp that keeps a sub-pixel patch visible.
+ *
+ * Shared by every line layer here because the problem is shared: below `SCALE_SPLIT_ZOOM` the
+ * patches are smaller than a pixel, whether they are being drawn as loss or subtracted from an
+ * extent, and a fill cannot render either. See the `outline` layer for the full reasoning.
+ */
+const MARK_WIDTH = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  5,
+  1.2,
+  9,
+  1.6,
+  12,
+  0.8,
+  15,
+  1.2,
+] as unknown as number;
+
+/**
+ * Every layer's filter for a given year, keyed by layer id.
+ *
+ * The single source for both jobs that need them: building the layers, and re-filtering live ones
+ * when the slider moves. They used to be written out in both places, in different files, which
+ * meant the year effect silently dropped the `change_type` half of each filter — the layers were
+ * correct until the first scrub, and then quietly wrong.
+ */
+export function filtersFor(domainId: string, year: number): [string, FilterSpecification][] {
+  const filter = timeFilter(year);
+
+  return [
+    [extentFillLayerId(domainId), and(filter, IS_EXTENT)],
+    [extentOutlineLayerId(domainId), and(filter, IS_EXTENT)],
+    [clearedFillLayerId(domainId), and(filter, IS_LOSS)],
+    [clearedOutlineLayerId(domainId), and(filter, IS_LOSS)],
+    [fillLayerId(domainId), and(filter, IS_NOT_EXTENT)],
+    [hatchLayerId(domainId), and(filter, IS_LOSS)],
+    [outlineLayerId(domainId), and(filter, IS_NOT_EXTENT)],
+  ];
+}
+
 export interface DomainLayers {
   sourceId: string;
   source: { type: 'vector'; url: string; attribution: string };
   layers: (FillLayerSpecification | LineLayerSpecification)[];
 }
 
-export function layersFor(entry: DomainManifestEntry, year: number): DomainLayers {
+export function layersFor(entry: DomainManifestEntry, year: number, mode: ViewMode): DomainLayers {
   const source = sourceId(entry.id);
   const sourceLayer = entry.tiles.sourceLayer;
-  const filter = timeFilter(year);
+  const filters = new Map(filtersFor(entry.id, year));
+  const shown = (layerMode: ViewMode) =>
+    ({ visibility: layerMode === mode ? 'visible' : 'none' }) as const;
 
+  // Throws rather than falling back to "no filter", which would render every feature of every
+  // change type in one layer. `filtersFor` and the layers below have to name the same ids; this
+  // is what makes a mismatch fail loudly at build time instead of quietly on the map.
+  const filterFor = (id: string): FilterSpecification => {
+    const found = filters.get(id);
+    if (!found) throw new Error(`layerSpec: no filter defined for layer ${id}`);
+    return found;
+  };
+
+  // --- The extent view: the baseline, with everything lost by `year` taken back out of it. -----
+  //
+  // Two layers doing opposite jobs. The extent fill draws where the subject was at the baseline;
+  // the cleared fill paints the ground colour over everything lost since, so what stays green is
+  // what is left. The subtraction is visual because MapLibre fills cannot subtract — which is
+  // also why the cleared fill is fully opaque, and why draw order is not negotiable.
+  const extentFill: FillLayerSpecification = {
+    id: extentFillLayerId(entry.id),
+    type: 'fill',
+    source,
+    'source-layer': sourceLayer,
+    filter: filterFor(extentFillLayerId(entry.id)),
+    layout: shown('extent'),
+    paint: {
+      'fill-color': styleFor(entry.hue, 'extent').color,
+      // Higher than the change view's fill: this is a ground state rather than an accumulation,
+      // so it should read as a solid mass the holes are cut from.
+      'fill-opacity': 0.85,
+    },
+  };
+
+  const extentOutline: LineLayerSpecification = {
+    id: extentOutlineLayerId(entry.id),
+    type: 'line',
+    source,
+    'source-layer': sourceLayer,
+    filter: filterFor(extentOutlineLayerId(entry.id)),
+    layout: shown('extent'),
+    paint: {
+      'line-color': styleFor(entry.hue, 'extent').color,
+      'line-width': MARK_WIDTH,
+      'line-opacity': 0.85,
+    },
+  };
+
+  const clearedFill: FillLayerSpecification = {
+    id: clearedFillLayerId(entry.id),
+    type: 'fill',
+    source,
+    'source-layer': sourceLayer,
+    filter: filterFor(clearedFillLayerId(entry.id)),
+    layout: shown('extent'),
+    paint: { 'fill-color': CLEARED, 'fill-opacity': 1 },
+  };
+
+  // Without this the extent view would look static at island view: the holes are the same
+  // sub-pixel patches as the loss layer, so at z8 a fill alone cuts nothing visible and the green
+  // mass would appear not to change as the years pass — the exact opposite of the map's claim.
+  const clearedOutline: LineLayerSpecification = {
+    id: clearedOutlineLayerId(entry.id),
+    type: 'line',
+    source,
+    'source-layer': sourceLayer,
+    filter: filterFor(clearedOutlineLayerId(entry.id)),
+    layout: shown('extent'),
+    paint: { 'line-color': CLEARED, 'line-width': MARK_WIDTH, 'line-opacity': 1 },
+  };
+
+  // --- The change view: what moved, accumulating with the year. --------------------------------
   const fill: FillLayerSpecification = {
     id: fillLayerId(entry.id),
     type: 'fill',
     source,
     'source-layer': sourceLayer,
-    filter,
+    filter: filterFor(fillLayerId(entry.id)),
+    layout: shown('change'),
     paint: {
       'fill-color': styleExpression(entry, 'color') as unknown as string,
       // Kept below 1 so overlapping years read as accumulation rather than a flat mass.
@@ -108,7 +259,8 @@ export function layersFor(entry: DomainManifestEntry, year: number): DomainLayer
     type: 'fill',
     source,
     'source-layer': sourceLayer,
-    filter: ['all', filter, ['==', ['get', 'change_type'], 'loss']] as FilterSpecification,
+    filter: filterFor(hatchLayerId(entry.id)),
+    layout: shown('change'),
     paint: { 'fill-pattern': HATCH_IMAGE, 'fill-opacity': 0.9 },
   };
 
@@ -117,7 +269,8 @@ export function layersFor(entry: DomainManifestEntry, year: number): DomainLayer
     type: 'line',
     source,
     'source-layer': sourceLayer,
-    filter,
+    filter: filterFor(outlineLayerId(entry.id)),
+    layout: shown('change'),
     paint: {
       // Two jobs, split at the zoom where the fill becomes legible.
       //
@@ -138,7 +291,7 @@ export function layersFor(entry: DomainManifestEntry, year: number): DomainLayer
       // ground it stands for. That is a legibility floor, not a measurement — the honest
       // alternative is not a truer dot, it is a blank map, which reads as "no loss here". Areas
       // are only ever quoted from the feature's own `metric`, never inferred from mark size.
-      'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.2, 9, 1.6, 12, 0.8, 15, 1.2],
+      'line-width': MARK_WIDTH,
       'line-opacity': 0.85,
     },
   };
@@ -146,7 +299,9 @@ export function layersFor(entry: DomainManifestEntry, year: number): DomainLayer
   return {
     sourceId: source,
     source: { type: 'vector', url: entry.tiles.url, attribution: entry.source.attribution },
-    layers: [fill, hatch, outline],
+    // Draw order, and it matters: the cleared patches cut holes in the extent beneath them, so
+    // they follow it. `layerIdsFor` states the same order and the two must agree.
+    layers: [extentFill, extentOutline, clearedFill, clearedOutline, fill, hatch, outline],
   };
 }
 

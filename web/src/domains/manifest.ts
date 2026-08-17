@@ -9,7 +9,7 @@
  * file or any component — only a new entry in the JSON.
  */
 
-import type { DomainId } from '@/types/feature';
+import type { ChangeType, DomainId } from '@/types/feature';
 
 export interface DomainSource {
   name: string;
@@ -25,6 +25,17 @@ export interface DomainManifestEntry {
   label: { en: string; zh: string };
   /** Extent hue. The one input to `colorFor` that varies by domain. */
   hue: string;
+  /**
+   * Which change types this domain's tileset contains.
+   *
+   * Read rather than assumed, because it decides what the UI offers: a domain carrying both an
+   * `extent` and a change type can be viewed either way and gets a view toggle, and one carrying
+   * only changes does not. Testing for a domain id instead would put `forest` back into the
+   * components, which is the coupling the manifest exists to remove.
+   *
+   * Optional: a manifest written before this field existed simply has no extent to show.
+   */
+  changeTypes?: ChangeType[];
   /**
    * Inclusive year range this domain actually has data for. Resolved by the pipeline at
    * extraction time, so a source that fell back to an older version reports its real, shorter
@@ -122,4 +133,25 @@ export function combinedRange(
 /** Whether a domain has data for a given year — drives the "no data yet" affordance. */
 export function coversYear(entry: DomainManifestEntry, year: number): boolean {
   return year >= entry.temporal.start && year <= entry.temporal.end;
+}
+
+/**
+ * The two questions a domain can be asked.
+ *
+ * `change` is what moved — the loss patches accumulating as the year advances. `extent` is what
+ * is left — the baseline with everything lost by that year taken out of it. Same tileset, same
+ * time filter; only which features are drawn, and how, differs.
+ */
+export type ViewMode = 'change' | 'extent';
+
+/**
+ * Whether a domain can answer both questions, and so should offer the toggle.
+ *
+ * Both halves are required. A domain with extent but no change type has no second view to switch
+ * to, and one with changes but no baseline cannot say what is left — offering a toggle in either
+ * case would give the reader an empty layer and no explanation.
+ */
+export function supportsExtentView(entry: DomainManifestEntry): boolean {
+  const types = entry.changeTypes ?? [];
+  return types.includes('extent') && types.some((type) => type !== 'extent');
 }

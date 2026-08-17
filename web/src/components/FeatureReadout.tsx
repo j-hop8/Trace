@@ -29,9 +29,14 @@ function sentence(props: TraceFeatureProperties, area: string | null): string {
         : `lost in ${from}`
       : props.change_type === 'gain'
         ? `appeared in ${from}`
-        : to
-          ? `present ${from}–${to}`
-          : `present since ${from}`;
+        : // Extent is an observation of one year, not a claim about every year since. "Present
+          // since 2000" would say this block is still standing, which is exactly what the loss
+          // features exist to contradict.
+          props.change_type === 'extent'
+          ? `mapped at the ${from} baseline`
+          : to
+            ? `present ${from}–${to}`
+            : `present since ${from}`;
 
   const subject = props.subtype ?? props.domain;
   return area ? `This ${subject}: ${when}, ${area}.` : `This ${subject}: ${when}.`;

@@ -6,7 +6,7 @@
 import { create } from 'zustand';
 
 import type { DomainId, TraceFeatureProperties } from '@/types/feature';
-import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
+import type { DomainManifest, DomainManifestEntry, ViewMode } from '@/domains/manifest';
 
 export interface SelectedFeature {
   properties: TraceFeatureProperties;
@@ -21,6 +21,16 @@ interface TraceState {
   /** Domain ids currently switched on. */
   activeDomains: Set<DomainId>;
 
+  /**
+   * Which question each domain is answering — see `ViewMode`.
+   *
+   * Per domain rather than global: with water and forest both on, one may be worth reading as
+   * change while the other is worth reading as what's left, and a single global switch would
+   * force a choice that has no reason to be shared. Domains absent from the map are in the
+   * default `change` view.
+   */
+  viewModes: Map<DomainId, ViewMode>;
+
   /** The year the slider is at. Layer filters read this; it is the only animation input. */
   year: number;
   playing: boolean;
@@ -30,6 +40,8 @@ interface TraceState {
   setManifest: (manifest: DomainManifest) => void;
   setManifestError: (message: string) => void;
   toggleDomain: (id: DomainId) => void;
+  setViewMode: (id: DomainId, mode: ViewMode) => void;
+  viewModeFor: (id: DomainId) => ViewMode;
   setYear: (year: number) => void;
   setPlaying: (playing: boolean) => void;
   select: (feature: SelectedFeature | null) => void;
@@ -40,6 +52,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   manifest: null,
   manifestError: null,
   activeDomains: new Set(),
+  viewModes: new Map(),
   year: new Date().getFullYear(),
   playing: false,
   selected: null,
@@ -82,6 +95,19 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       const keepSelection = state.selected && next.has(state.selected.properties.domain);
       return { activeDomains: next, selected: keepSelection ? state.selected : null };
     }),
+
+  setViewMode: (id, mode) =>
+    set((state) => {
+      const next = new Map(state.viewModes);
+      next.set(id, mode);
+      // The readout describes one feature, and the two views draw different features — a loss
+      // patch stays selected while the map switches to showing what's left of the baseline,
+      // leaving a panel that no longer refers to anything on screen.
+      const keepSelection = state.selected && state.selected.properties.domain !== id;
+      return { viewModes: next, selected: keepSelection ? state.selected : null };
+    }),
+
+  viewModeFor: (id) => get().viewModes.get(id) ?? 'change',
 
   setYear: (year) => set({ year }),
   setPlaying: (playing) => set({ playing }),

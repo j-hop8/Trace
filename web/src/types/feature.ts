@@ -6,8 +6,13 @@
  * pipeline test `test_schema.py::test_ts_and_json_schema_agree` fails loudly when they drift.
  */
 
-/** The universal change signal, identical across every domain. */
-export type ChangeType = 'gain' | 'loss' | 'stable';
+/**
+ * The universal change signal, identical across every domain.
+ *
+ * `extent` is not a change: it is the baseline the changes are measured against, carried as a
+ * change_type so that one tileset per domain still holds everything the map draws.
+ */
+export type ChangeType = 'extent' | 'gain' | 'loss' | 'stable';
 
 /**
  * A domain id. Deliberately `string` rather than a union of 'water' | 'forest': the web app
