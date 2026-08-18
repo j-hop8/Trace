@@ -51,7 +51,12 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       if (shouldBeVisible && !present) {
         const spec = layersFor(entry, year, viewModeFor(entry.id));
         map.addSource(spec.sourceId, spec.source);
-        for (const layer of spec.layers) map.addLayer(layer);
+        // Under the basemap's labels, not over them. Appending with no `beforeId` puts data on
+        // top of everything, and the extent view is a near-solid mass -- it covered every place
+        // name in the central range, so the reader could see the forest and not where it was.
+        // Found by type rather than by id so it survives a basemap whose label layer is renamed.
+        const firstSymbol = map.getStyle().layers.find((layer) => layer.type === 'symbol')?.id;
+        for (const layer of spec.layers) map.addLayer(layer, firstSymbol);
       } else if (!shouldBeVisible && present) {
         for (const id of layerIdsFor(entry.id)) {
           if (map.getLayer(id)) map.removeLayer(id);

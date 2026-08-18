@@ -99,8 +99,13 @@ export default function FeatureReadout() {
         <dt className="text-slate-600">method</dt>
         <dd>{props.method}</dd>
         <dt className="text-slate-600">confidence</dt>
-        {/* Surfaced rather than smoothed over (A5) — a number the reader can weigh. */}
-        <dd>{props.confidence.toFixed(2)}</dd>
+        {/*
+          Surfaced rather than smoothed over (A5) — a number the reader can weigh. Guarded because
+          these properties are an unchecked cast of raw tile attributes: tiling drops nulls (which
+          is why the time filter has to test `has`), so a domain that omitted this would throw
+          inside render and take the whole app down rather than losing one line of a panel.
+        */}
+        <dd>{typeof props.confidence === 'number' ? props.confidence.toFixed(2) : '—'}</dd>
       </dl>
 
       {entry && (
