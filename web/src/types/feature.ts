@@ -56,21 +56,46 @@ export interface TraceFeature {
 }
 
 /**
- * Vector tiles flatten nested objects, so `metric` arrives as `metric.area_ha` at the top level.
- * Reading a metric therefore goes through this rather than `props.metric.area_ha`, which is
- * `undefined` on a tile-decoded feature and would silently render "—" instead of a number.
+ * Read a metric from a feature, whichever shape it arrived in.
+ *
+ * Mapbox Vector Tiles have no nested values, so `metric` does not survive tiling as an object.
+ * Measured against a real tileset, tippecanoe serialises it to a **JSON string** —
+ * `'{"area_ha":0.1397}'` — rather than flattening it to `metric.area_ha` as first assumed. Both
+ * are handled here, along with the plain object a feature has before it is tiled.
+ *
+ * This matters more than it looks: every one of those wrong guesses returns `undefined` rather
+ * than throwing, so the readout would quietly show "—" for a number the pipeline definitely
+ * measured, and nothing would indicate the value had been lost in transit.
  */
 export function readMetric(
   props: Record<string, unknown>,
   key: keyof FeatureMetric,
 ): number | undefined {
+  // Flattened (`metric.area_ha`) or top-level — cheapest checks first.
   const flat = props[`metric.${key}`] ?? props[key];
   if (typeof flat === 'number') return flat;
 
-  const nested = props.metric;
-  if (nested && typeof nested === 'object') {
-    const value = (nested as Record<string, unknown>)[key];
+  const metric = props.metric;
+
+  // The shape tiles actually deliver.
+  if (typeof metric === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(metric);
+      if (parsed && typeof parsed === 'object') {
+        const value = (parsed as Record<string, unknown>)[key];
+        if (typeof value === 'number') return value;
+      }
+    } catch {
+      // Not JSON; fall through rather than throwing inside a render path.
+    }
+    return undefined;
+  }
+
+  // Untiled features, straight from the pipeline.
+  if (metric && typeof metric === 'object') {
+    const value = (metric as Record<string, unknown>)[key];
     if (typeof value === 'number') return value;
   }
+
   return undefined;
 }

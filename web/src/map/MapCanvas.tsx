@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import baseStyle from '@/map/basemap/style.json';
 import { usePmtilesProtocol } from '@/map/usePmtilesProtocol';
+import { useDomainLayers } from '@/map/useDomainLayers';
 
 /**
  * The map canvas.
@@ -27,6 +28,11 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const protocolReady = usePmtilesProtocol();
   const [error, setError] = useState<string | null>(null);
+
+  // Held in state rather than the ref alone, so layer management re-runs once the style is ready.
+  // Adding a source before `load` throws; this is what makes "ready" observable to React.
+  const [readyMap, setReadyMap] = useState<maplibregl.Map | null>(null);
+  useDomainLayers(readyMap);
 
   // The callback is held in a ref rather than read from the effect's closure. A parent passing an
   // inline `onReady={() => …}` creates a new function identity on every render, so depending on it
@@ -63,7 +69,30 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       setError(message);
     });
 
-    map.on('load', () => onReadyRef.current?.(map));
+    // `load` is not enough on its own. It fires after the first *render*, and rendering is driven
+    // by requestAnimationFrame — which the browser pauses in a background tab. A map opened in a
+    // tab that never came to the front therefore never reports ready, and because nothing retries,
+    // the domain layers are never added at all: a permanently empty map once you do look at it.
+    //
+    // `styledata` fires on style parse instead, with no paint involved, so it covers that case.
+    //
+    // The guard is `getStyle()` rather than the more obvious `isStyleLoaded()`, because the two
+    // ask different questions. `isStyleLoaded()` is also false while any *tile* is still in
+    // flight, and tile fetches are themselves kicked off by rendering — so in a background tab it
+    // stays false forever and gates the very work it is supposed to unblock. `getStyle()` returns
+    // undefined until the stylesheet is parsed and a value from then on, which is exactly the
+    // precondition addSource/addLayer have. `ready` keeps this a one-shot.
+    let ready = false;
+    const markReady = () => {
+      if (ready || !map.getStyle()) return;
+      ready = true;
+      map.off('styledata', markReady);
+      setReadyMap(map);
+      onReadyRef.current?.(map);
+    };
+
+    map.on('styledata', markReady);
+    map.on('load', markReady);
 
     // MapLibre measures its container once, at construction. In dev the stylesheet can still be
     // in flight at that moment, so the div is 0x0 and the map silently falls back to its 400x300
@@ -85,6 +114,7 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       observer.disconnect();
       map.remove();
       mapRef.current = null;
+      setReadyMap(null);
     };
     // Deliberately depends on protocolReady alone: the map is constructed once and lives until
     // unmount. onReady is reached through a ref precisely so it cannot appear here.
