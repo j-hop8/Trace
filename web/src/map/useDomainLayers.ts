@@ -4,7 +4,6 @@ import type maplibregl from 'maplibre-gl';
 import {
   HATCH_IMAGE,
   createHatchImage,
-  fillLayerId,
   filtersFor,
   layerIdsFor,
   layerIdsForMode,
@@ -131,16 +130,19 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     };
 
     map.on('click', onClick);
-    for (const entry of manifest.domains) {
-      map.on('mouseenter', fillLayerId(entry.id), onEnter);
-      map.on('mouseleave', fillLayerId(entry.id), onLeave);
+    // Every layer of both views, matching the click handler above. Binding only the change view's
+    // fill left the extent view clickable but with no pointer cursor, so the green read as inert.
+    const hoverLayers = manifest.domains.flatMap((entry) => layerIdsFor(entry.id));
+    for (const id of hoverLayers) {
+      map.on('mouseenter', id, onEnter);
+      map.on('mouseleave', id, onLeave);
     }
 
     return () => {
       map.off('click', onClick);
-      for (const entry of manifest.domains) {
-        map.off('mouseenter', fillLayerId(entry.id), onEnter);
-        map.off('mouseleave', fillLayerId(entry.id), onLeave);
+      for (const id of hoverLayers) {
+        map.off('mouseenter', id, onEnter);
+        map.off('mouseleave', id, onLeave);
       }
     };
   }, [map, manifest, select]);

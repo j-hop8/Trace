@@ -81,6 +81,15 @@ TAIWAN_PIXEL_HA: Final[float] = 0.071
 # whenever the threshold changes.
 FOREST_RETAINED_PCT: Final[float] = 90.3
 
+# Share of island-wide *baseline* forest area that survives MIN_PATCH_PIXELS: 2,335,902 of
+# 2,340,266 ha at >= TREECOVER_THRESHOLD_PCT canopy in HANSEN_BASELINE_YEAR, over TAIWAN_BBOX.
+#
+# Far higher than FOREST_RETAINED_PCT because the two sieve different things: loss is thousands of
+# scattered small patches, so dropping isolated pixels costs ~10% of it, while the baseline is one
+# near-continuous mass and the same rule costs 0.2%. Both figures are quoted to users, and quoting
+# the loss number for the extent layer would understate the extent layer's completeness by 10 pp.
+FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
+
 M2_PER_HA: Final[float] = 10_000.0
 
 # --- Output -----------------------------------------------------------------------------------

@@ -11,6 +11,7 @@ to the tiling step, no change to the web app.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,16 +76,15 @@ class Domain(ABC):
             aoi: an ee.Geometry to clip to.
         """
 
-    #: Which change types this domain's tileset actually contains.
+    #: Which change types this domain's extraction is *designed* to emit.
     #:
-    #: The web app offers the extent/change view toggle only where both kinds are present, and it
-    #: has to learn that from here rather than by testing for a domain id -- a layer whose UI
-    #: depends on `if (domain === 'forest')` is exactly the coupling the manifest exists to
-    #: prevent. A domain that only has changes to show simply never advertises `extent`, and no
-    #: toggle appears for it.
+    #: A declaration of intent, not a description of the data -- it is the fallback used before a
+    #: tileset exists. What the manifest publishes is measured from the built archive instead (see
+    #: `manifest.build`), because a class attribute stays true even when the run that was supposed
+    #: to honour it was interrupted, and the UI would then offer a view toggle onto an empty map.
     change_types: tuple[str, ...] = ("loss",)
 
-    def manifest_entry(self, tiles_url: str) -> dict[str, Any]:
+    def manifest_entry(self, tiles_url: str, change_types: Sequence[str]) -> dict[str, Any]:
         """Describe this domain for `data/domains.json`.
 
         Concrete by design -- the manifest shape is a contract with the web app, so subclasses
@@ -97,7 +97,10 @@ class Domain(ABC):
             "id": self.id,
             "label": self.label,
             "hue": DOMAIN_HUES[self.id],
-            "changeTypes": list(self.change_types),
+            # Passed in rather than read from `self`: the caller is the one that can tell what the
+            # tileset actually holds, and making it an argument means this cannot quietly publish
+            # an aspiration.
+            "changeTypes": list(change_types),
             "temporal": {"start": first, "end": last},
             "source": {
                 "name": self.source.name,

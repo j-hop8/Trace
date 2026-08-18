@@ -154,7 +154,9 @@ class ForestDomain(Domain):
             f"The cover view draws the {config.HANSEN_BASELINE_YEAR} baseline with mapped loss "
             "removed, so it is an estimate of what remains rather than a fresh observation of it: "
             "regrowth is not added back (Hansen's gain band ends in 2012 and is not comparable "
-            "year for year), and the unmapped loss above is not taken out."
+            "year for year), and the unmapped loss above is not taken out. The baseline itself "
+            f"passes the same single-pixel sieve and retains about "
+            f"{config.FOREST_EXTENT_RETAINED_PCT:.1f}% of the canopy area the source records."
         )
 
     def temporal_range(self) -> tuple[int, int]:
@@ -312,7 +314,10 @@ class ForestDomain(Domain):
                 flush=True,
             )
 
-        # Extent last, so a failure in the newer pass cannot cost a completed loss run its output.
+        # Extent last because it is the newer, riskier pass -- but note this buys less than it
+        # looks like: `extract.run` writes nothing until this method returns, so a failure here
+        # still discards the loss features built above and the whole domain must be re-extracted.
+        # Only the previously written file on disk is protected, and that by `write_features`.
         features.extend(self.extract_extent(aoi))
 
         return {"type": "FeatureCollection", "features": features}
