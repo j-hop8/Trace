@@ -33,8 +33,21 @@ interface TraceState {
    */
   viewModes: Map<DomainId, ViewMode>;
 
-  /** The year the slider is at. Layer filters read this; it is the only animation input. */
+  /**
+   * The year the slider is *asking* for. The thumb tracks this, and it moves as fast as the user
+   * or the playback loop wants it to.
+   */
   year: number;
+
+  /**
+   * The year the map has actually drawn.
+   *
+   * Not the same thing as `year`, and the gap is the whole point. A year change makes MapLibre
+   * re-parse every loaded tile in the worker — 158k polygons for forest — so the map lands on a
+   * requested year some way after it was requested. Every number on screen reads from this one, so
+   * the interface never names a year that is not the one being displayed.
+   */
+  renderedYear: number;
   playing: boolean;
 
   selected: SelectedFeature | null;
@@ -45,6 +58,8 @@ interface TraceState {
   setViewMode: (id: DomainId, mode: ViewMode) => void;
   viewModeFor: (id: DomainId) => ViewMode;
   setYear: (year: number) => void;
+  /** Called by the map once a requested year is on screen. */
+  setRenderedYear: (year: number) => void;
   setPlaying: (playing: boolean) => void;
   select: (feature: SelectedFeature | null) => void;
 }
@@ -73,6 +88,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   activeDomains: new Set(),
   viewModes: new Map(),
   year: new Date().getFullYear(),
+  renderedYear: new Date().getFullYear(),
   playing: false,
   selected: null,
 
@@ -97,6 +113,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       // Start at the most recent year any domain covers, so the first paint shows the present
       // rather than an arbitrary midpoint.
       year: Number.isFinite(latest) ? latest : new Date().getFullYear(),
+      renderedYear: Number.isFinite(latest) ? latest : new Date().getFullYear(),
     });
   },
 
@@ -120,6 +137,9 @@ export const useTraceStore = create<TraceState>((set, get) => ({
         // 1990 left over from a 1984-start domain would show "1990" beside a thumb parked at 2001
         // while the map filtered at 1990 and drew nothing. Three answers to one question.
         year: clampYear(state.year, state.manifest, next),
+        // Clamped alongside `year` for the same reason: the readout reads from this, and an
+        // unclamped value would print a year outside the axis the thumb is now sitting on.
+        renderedYear: clampYear(state.renderedYear, state.manifest, next),
       };
     }),
 
@@ -137,6 +157,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   viewModeFor: (id) => get().viewModes.get(id) ?? 'change',
 
   setYear: (year) => set({ year }),
+  setRenderedYear: (renderedYear) => set({ renderedYear }),
   setPlaying: (playing) => set({ playing }),
   select: (selected) => set({ selected }),
 }));

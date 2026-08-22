@@ -32,7 +32,9 @@ const VIEW_LABELS: Record<ViewMode, { zh: string; title: (entry: DomainManifestE
 export default function LayerToggles() {
   const manifest = useTraceStore((s) => s.manifest);
   const activeDomains = useTraceStore((s) => s.activeDomains);
-  const year = useTraceStore((s) => s.year);
+  // The drawn year, not the requested one, so this badge and the slider's readout never disagree
+  // about which year the map is showing.
+  const year = useTraceStore((s) => s.renderedYear);
   const toggleDomain = useTraceStore((s) => s.toggleDomain);
   // Subscribed to as state rather than read through `viewModeFor`, which is a getter and so would
   // not re-render this list when the mode changed.

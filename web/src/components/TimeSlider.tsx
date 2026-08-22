@@ -10,54 +10,57 @@ import { useActiveEntries, useTraceStore } from '@/store/useTraceStore';
  * bounds — water reaches back to 1984, forest only to 2000. B8 calls forcing a shared range a
  * mistake, because it either invents years a source does not have or hides ones it does.
  *
- * Moving it only writes a number to the store. The map filters on the GPU, so scrubbing costs no
- * network and shows no reload flicker.
+ * Moving it only writes a number to the store. Applying that number costs the map a re-parse of
+ * every loaded tile, so the thumb and the map run at different speeds by design: the thumb follows
+ * the pointer, while `renderedYear` reports what has actually been drawn. The readout shows the
+ * latter, so the number beside the slider always names the year on screen.
  */
 
-/** Years advanced per second while playing. Slow enough to read, quick enough to hold attention. */
-const YEARS_PER_SECOND = 6;
+/**
+ * The fastest playback will run — a ceiling, not a rate.
+ *
+ * Playback advances only once the map reports the previous year drawn, so the real pace is whatever
+ * the machine sustains and this only stops a fast one from flickering past unreadably. Driving it
+ * off a clock instead is what used to make the map look frozen: years were requested faster than
+ * they could be rendered, and each reload cancelled the one before it, so only the last one landed.
+ */
+const MAX_YEARS_PER_SECOND = 6;
+const MIN_STEP_MS = 1000 / MAX_YEARS_PER_SECOND;
 
 export default function TimeSlider() {
   const entries = useActiveEntries();
   const year = useTraceStore((s) => s.year);
+  const renderedYear = useTraceStore((s) => s.renderedYear);
   const playing = useTraceStore((s) => s.playing);
   const setYear = useTraceStore((s) => s.setYear);
   const setPlaying = useTraceStore((s) => s.setPlaying);
 
   const range = combinedRange(entries);
-  const frame = useRef<number>();
+  /** When the year currently playing was asked for, so the ceiling measures the whole step. */
+  const stepAskedAt = useRef(0);
 
   useEffect(() => {
     if (!playing || !range) return;
 
-    let last = performance.now();
-    let current = year >= range.end ? range.start : year;
+    if (year >= range.end) {
+      setPlaying(false);
+      return;
+    }
 
-    const step = (now: number) => {
-      const advanced = ((now - last) / 1000) * YEARS_PER_SECOND;
-      if (advanced >= 1) {
-        const whole = Math.floor(advanced);
-        current = Math.min(range.end, current + whole);
-        // Advance by the time those years actually cost, not to `now` — resetting to `now` threw
-        // away the leftover fraction each step, so playback ran slower than YEARS_PER_SECOND
-        // claims and stepped unevenly.
-        last += (whole / YEARS_PER_SECOND) * 1000;
-        setYear(current);
-        if (current >= range.end) {
-          setPlaying(false);
-          return;
-        }
-      }
-      frame.current = requestAnimationFrame(step);
-    };
+    // The map is still drawing the year already asked for. Asking for the next one now is exactly
+    // what made playback unwatchable: the pending reload would be thrown away half-finished.
+    if (renderedYear !== year) return;
 
-    frame.current = requestAnimationFrame(step);
-    return () => {
-      if (frame.current !== undefined) cancelAnimationFrame(frame.current);
-    };
-    // `year` is deliberately absent: including it would restart the animation on every tick.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, range?.start, range?.end, setYear, setPlaying]);
+    // Time already spent rendering counts towards the step, so a slow year advances the moment it
+    // appears and only a fast one waits.
+    const wait = Math.max(0, MIN_STEP_MS - (performance.now() - stepAskedAt.current));
+    const timer = window.setTimeout(() => {
+      stepAskedAt.current = performance.now();
+      setYear(year + 1);
+    }, wait);
+
+    return () => window.clearTimeout(timer);
+  }, [playing, year, renderedYear, range?.start, range?.end, setYear, setPlaying]);
 
   // Nothing active means no meaningful axis. Hiding beats rendering a degenerate control.
   if (!range) return null;
@@ -66,7 +69,18 @@ export default function TimeSlider() {
     <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-ink-700/80 bg-ink-900/85 px-4 py-3 backdrop-blur">
       <button
         type="button"
-        onClick={() => setPlaying(!playing)}
+        onClick={() => {
+          if (playing) {
+            setPlaying(false);
+            return;
+          }
+          stepAskedAt.current = performance.now();
+          // Replaying from the end restarts at the first year *and shows it*. Starting the loop at
+          // `range.start` without emitting it made the first visible frame `range.start + 1`, so a
+          // replay opened on a jump from the last year to the second one.
+          if (year >= range.end) setYear(range.start);
+          setPlaying(true);
+        }}
         aria-label={playing ? 'Pause' : 'Play through the years'}
         className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-ink-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
       >
@@ -93,8 +107,9 @@ export default function TimeSlider() {
         </div>
       </div>
 
+      {/* The drawn year, not the requested one — see the note at the top of the file. */}
       <output className="w-14 shrink-0 text-right font-mono text-lg tabular-nums text-white">
-        {year}
+        {renderedYear}
       </output>
     </div>
   );
