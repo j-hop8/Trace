@@ -15,6 +15,13 @@ import { useDomainLayers } from '@/map/useDomainLayers';
  * naming an example, so a grep for domain literals stays a valid check on this file.
  */
 
+/**
+ * The basemap's source id, as named in `basemap/style.json`.
+ *
+ * Read from the style rather than written out, so it cannot drift from the file it describes.
+ */
+const BASEMAP_SOURCE = Object.keys((baseStyle as { sources: Record<string, unknown> }).sources)[0];
+
 /** Taiwan, framed to fill the viewport on first paint. */
 const TAIWAN_BOUNDS: [number, number, number, number] = [119.3, 21.85, 122.05, 25.35];
 
@@ -27,7 +34,9 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const protocolReady = usePmtilesProtocol();
-  const [error, setError] = useState<string | null>(null);
+  // The failing source is carried alongside the message, because the remedy differs completely:
+  // a missing basemap is one file to fetch, a missing domain tileset is a pipeline run.
+  const [error, setError] = useState<{ message: string; sourceId?: string } | null>(null);
 
   // Held in state rather than the ref alone, so layer management re-runs once the style is ready.
   // Adding a source before `load` throws; this is what makes "ready" observable to React.
@@ -65,8 +74,16 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
     map.on('error', (event) => {
       // MapLibre reports a missing tileset as a non-fatal event and then shows an empty canvas.
       // Surfacing it beats leaving the reader to wonder why Taiwan is missing.
-      const message = event.error?.message ?? 'unknown map error';
-      setError(message);
+      //
+      // Which source failed decides what the reader is told. Before domain layers existed every
+      // error really was the basemap, so the handler said so unconditionally -- and then a broken
+      // domain tileset produced "The basemap failed to load" above a message naming a trace layer,
+      // sending the reader to re-fetch a basemap that was fine.
+      const sourceId = (event as { sourceId?: string }).sourceId;
+      setError({
+        message: event.error?.message ?? 'unknown map error',
+        ...(sourceId && { sourceId }),
+      });
     });
 
     // `load` is not enough on its own. It fires after the first *render*, and rendering is driven
@@ -127,11 +144,28 @@ export default function MapCanvas({ onReady }: MapCanvasProps) {
       {error && (
         <div className="pointer-events-none absolute inset-x-0 top-0 p-4">
           <div className="mx-auto max-w-xl rounded-lg border border-amber-700/50 bg-amber-950/80 p-3 text-sm backdrop-blur">
-            <p className="font-medium text-amber-300">The basemap failed to load</p>
-            <p className="mt-1 font-mono text-xs leading-relaxed text-amber-100/70">{error}</p>
+            <p className="font-medium text-amber-300">
+              {error.sourceId === BASEMAP_SOURCE
+                ? 'The basemap failed to load'
+                : error.sourceId
+                  ? `A data layer failed to load (${error.sourceId})`
+                  : 'The map reported an error'}
+            </p>
+            <p className="mt-1 font-mono text-xs leading-relaxed text-amber-100/70">
+              {error.message}
+            </p>
             <p className="mt-2 text-xs text-amber-100/60">
-              Fetch the Taiwan extract into <code>data/taiwan-base.pmtiles</code> — see
-              <code> .agents/tickets/done/T-006-web-basemap.md</code>.
+              {error.sourceId === BASEMAP_SOURCE ? (
+                <>
+                  Fetch the Taiwan extract into <code>data/taiwan-base.pmtiles</code> — see
+                  <code> .agents/tickets/done/T-006-web-basemap.md</code>.
+                </>
+              ) : (
+                <>
+                  Rebuild the tiles it names:{' '}
+                  <code>cd pipeline &amp;&amp; python -m trace_pipeline.cli all</code>.
+                </>
+              )}
             </p>
           </div>
         </div>

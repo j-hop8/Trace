@@ -3,10 +3,12 @@
  * UI and the map must agree on.
  */
 
+import { useMemo } from 'react';
 import { create } from 'zustand';
 
 import type { DomainId, TraceFeatureProperties } from '@/types/feature';
-import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
+import { combinedRange } from '@/domains/manifest';
+import type { DomainManifest, DomainManifestEntry, ViewMode } from '@/domains/manifest';
 
 export interface SelectedFeature {
   properties: TraceFeatureProperties;
@@ -21,6 +23,16 @@ interface TraceState {
   /** Domain ids currently switched on. */
   activeDomains: Set<DomainId>;
 
+  /**
+   * Which question each domain is answering — see `ViewMode`.
+   *
+   * Per domain rather than global: with water and forest both on, one may be worth reading as
+   * change while the other is worth reading as what's left, and a single global switch would
+   * force a choice that has no reason to be shared. Domains absent from the map are in the
+   * default `change` view.
+   */
+  viewModes: Map<DomainId, ViewMode>;
+
   /** The year the slider is at. Layer filters read this; it is the only animation input. */
   year: number;
   playing: boolean;
@@ -30,16 +42,36 @@ interface TraceState {
   setManifest: (manifest: DomainManifest) => void;
   setManifestError: (message: string) => void;
   toggleDomain: (id: DomainId) => void;
+  setViewMode: (id: DomainId, mode: ViewMode) => void;
+  viewModeFor: (id: DomainId) => ViewMode;
   setYear: (year: number) => void;
   setPlaying: (playing: boolean) => void;
   select: (feature: SelectedFeature | null) => void;
-  activeEntries: () => DomainManifestEntry[];
+}
+
+/**
+ * Hold `year` inside the range the active domains actually cover.
+ *
+ * Returns the year unchanged when nothing is active — there is no meaningful range to clamp to,
+ * and the slider hides itself in that case rather than rendering a degenerate axis.
+ */
+function clampYear(
+  year: number,
+  manifest: DomainManifest | null,
+  activeDomains: Set<DomainId>,
+): number {
+  if (!manifest) return year;
+  const active = manifest.domains.filter((domain) => activeDomains.has(domain.id));
+  const range = combinedRange(active);
+  if (!range) return year;
+  return Math.min(Math.max(year, range.start), range.end);
 }
 
 export const useTraceStore = create<TraceState>((set, get) => ({
   manifest: null,
   manifestError: null,
   activeDomains: new Set(),
+  viewModes: new Map(),
   year: new Date().getFullYear(),
   playing: false,
   selected: null,
@@ -80,16 +112,53 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       }
       // A selection belonging to a domain that just went dark would leave an orphaned readout.
       const keepSelection = state.selected && next.has(state.selected.properties.domain);
-      return { activeDomains: next, selected: keepSelection ? state.selected : null };
+      return {
+        activeDomains: next,
+        selected: keepSelection ? state.selected : null,
+        // Toggling a layer changes the slider's bounds, and an unclamped year then disagrees with
+        // both the thumb and the map: the slider clamps only what it *displays*, so a year of
+        // 1990 left over from a 1984-start domain would show "1990" beside a thumb parked at 2001
+        // while the map filtered at 1990 and drew nothing. Three answers to one question.
+        year: clampYear(state.year, state.manifest, next),
+      };
     }),
+
+  setViewMode: (id, mode) =>
+    set((state) => {
+      const next = new Map(state.viewModes);
+      next.set(id, mode);
+      // The readout describes one feature, and the two views draw different features — a loss
+      // patch stays selected while the map switches to showing what's left of the baseline,
+      // leaving a panel that no longer refers to anything on screen.
+      const keepSelection = state.selected && state.selected.properties.domain !== id;
+      return { viewModes: next, selected: keepSelection ? state.selected : null };
+    }),
+
+  viewModeFor: (id) => get().viewModes.get(id) ?? 'change',
 
   setYear: (year) => set({ year }),
   setPlaying: (playing) => set({ playing }),
   select: (selected) => set({ selected }),
-
-  activeEntries: () => {
-    const { manifest, activeDomains } = get();
-    if (!manifest) return [];
-    return manifest.domains.filter((d) => activeDomains.has(d.id));
-  },
 }));
+
+/**
+ * The manifest entries currently switched on.
+ *
+ * A hook rather than a store method, and the distinction is not cosmetic. As a method it was
+ * called *inside* a selector — `useTraceStore((s) => s.activeEntries())` — which returns a fresh
+ * array on every read. zustand 4 memoises per snapshot so that merely cost a re-render on each
+ * slider tick, but zustand 5 replaced that wrapper with a plain `useSyncExternalStore`, where a
+ * selector returning a new reference each call is an infinite render loop. With T-008 open to move
+ * the web toolchain forward, leaving the trap in place meant handing the next upgrade a crash with
+ * no obvious cause. Selecting two stable references and deriving under `useMemo` is correct on
+ * both versions.
+ */
+export function useActiveEntries(): DomainManifestEntry[] {
+  const manifest = useTraceStore((s) => s.manifest);
+  const activeDomains = useTraceStore((s) => s.activeDomains);
+
+  return useMemo(
+    () => (manifest ? manifest.domains.filter((domain) => activeDomains.has(domain.id)) : []),
+    [manifest, activeDomains],
+  );
+}

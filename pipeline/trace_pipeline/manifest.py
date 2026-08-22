@@ -42,9 +42,27 @@ def build(domains: Sequence[Domain]) -> dict[str, Any]:
     generated-at field would make every run produce a different file even when the data is
     identical.
     """
-    entries = [domain.manifest_entry(tiles_url(domain.id)) for domain in domains]
+    entries = [
+        domain.manifest_entry(tiles_url(domain.id), _change_types_for(domain)) for domain in domains
+    ]
     _check(entries)
     return {"version": config.MANIFEST_VERSION, "domains": entries}
+
+
+def _change_types_for(domain: Domain) -> tuple[str, ...]:
+    """What the domain's tileset actually contains, falling back to what it intends to produce.
+
+    Measured first, because the manifest drives which views the UI offers: a domain declaring
+    `("extent", "loss")` whose extent pass was interrupted would otherwise still advertise a view
+    toggle, and switching to it would show an empty map with nothing to explain why.
+
+    The fallback is for the pre-tiling case only -- writing a manifest before the archive exists
+    is legitimate (a provisional run, a test), and there is nothing better to say then.
+    """
+    from trace_pipeline import tiles
+
+    measured = tiles.change_types_in(tiles.pmtiles_path(domain.id))
+    return measured if measured is not None else tuple(domain.change_types)
 
 
 def _check(entries: Sequence[dict[str, Any]]) -> None:

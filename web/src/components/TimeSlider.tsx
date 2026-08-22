@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { combinedRange } from '@/domains/manifest';
-import { useTraceStore } from '@/store/useTraceStore';
+import { useActiveEntries, useTraceStore } from '@/store/useTraceStore';
 
 /**
  * The time control.
@@ -18,7 +18,7 @@ import { useTraceStore } from '@/store/useTraceStore';
 const YEARS_PER_SECOND = 6;
 
 export default function TimeSlider() {
-  const entries = useTraceStore((s) => s.activeEntries());
+  const entries = useActiveEntries();
   const year = useTraceStore((s) => s.year);
   const playing = useTraceStore((s) => s.playing);
   const setYear = useTraceStore((s) => s.setYear);
@@ -36,8 +36,12 @@ export default function TimeSlider() {
     const step = (now: number) => {
       const advanced = ((now - last) / 1000) * YEARS_PER_SECOND;
       if (advanced >= 1) {
-        current = Math.min(range.end, current + Math.floor(advanced));
-        last = now;
+        const whole = Math.floor(advanced);
+        current = Math.min(range.end, current + whole);
+        // Advance by the time those years actually cost, not to `now` — resetting to `now` threw
+        // away the leftover fraction each step, so playback ran slower than YEARS_PER_SECOND
+        // claims and stepped unevenly.
+        last += (whole / YEARS_PER_SECOND) * 1000;
         setYear(current);
         if (current >= range.end) {
           setPlaying(false);

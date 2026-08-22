@@ -49,6 +49,12 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     from trace_pipeline import extract
 
+    # Before the AOI, not after. ee.Geometry.Rectangle is a server-side call under the hood, so it
+    # needs an initialized client too -- building the AOI first failed the whole command with
+    # "Earth Engine client library not initialized" before any domain was even reached.
+    # `initialize` is idempotent, so `extract.run` calling it again costs nothing.
+    extract.initialize()
+
     aoi = config.bbox_to_ee_geometry(config.TAIWAN_BBOX)
     for domain_id in ids:
         extract.run(domain_registry.get(domain_id), aoi)

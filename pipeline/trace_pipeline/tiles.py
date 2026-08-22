@@ -19,7 +19,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from trace_pipeline import extract
 
@@ -218,16 +218,37 @@ def verify(archive: Path, domain_id: str, expected_features: int) -> None:
         )
 
 
-def _layer_stats(archive: Path) -> tuple[str, int] | None:
-    """(layer name, feature count) from the archive's tilestats, or None if unavailable.
+def change_types_in(archive: Path) -> tuple[str, ...] | None:
+    """The distinct `change_type` values the built archive actually contains.
 
-    Every failure here returns None rather than raising. This is the *verifier*, and an
-    unavailable verifier must degrade to "unchecked, and said so" — not take down a build whose
-    output is fine. `check=False` alone does not achieve that: `subprocess.run` still raises
-    FileNotFoundError when the binary is missing, which would escape `verify()`, propagate out of
-    `build()`, and leave the staging file behind — breaking the idempotency guarantee for a
-    machine that simply lacks an optional tool.
+    The manifest advertises this so the web app knows which views a domain can offer, and it has
+    to be *measured* rather than declared: a domain class asserting "I produce extent and loss"
+    stays true in the manifest even when the extent pass was interrupted, and the UI then offers a
+    view toggle that switches to an empty map. Tippecanoe already records the distinct values of
+    every attribute in tilestats, so the tileset can be asked directly.
+
+    Returns None when the archive is missing or its stats cannot be read -- the caller decides
+    whether that is fatal, exactly as :func:`_layer_stats` does.
     """
+    metadata = _tilestats_layers(archive)
+    if metadata is None:
+        return None
+
+    for attribute in metadata.get("attributes", []):
+        if attribute.get("attribute") != "change_type":
+            continue
+        values = attribute.get("values")
+        if not isinstance(values, list):
+            return None
+        return tuple(sorted(str(value) for value in values))
+
+    # The layer exists but carries no change_type at all, which is a broken tileset rather than an
+    # empty one -- every B4 feature is required to have it.
+    return None
+
+
+def _tilestats_layers(archive: Path) -> dict[str, Any] | None:
+    """The single layer's tilestats block, or None if it cannot be read."""
     try:
         result = subprocess.run(
             ["pmtiles", "show", "--metadata", str(archive)],
@@ -249,4 +270,20 @@ def _layer_stats(archive: Path) -> tuple[str, int] | None:
 
     if len(layers) != 1:
         return None
-    return layers[0].get("layer"), layers[0].get("count")
+    return layers[0]
+
+
+def _layer_stats(archive: Path) -> tuple[str, int] | None:
+    """(layer name, feature count) from the archive's tilestats, or None if unavailable.
+
+    Every failure here returns None rather than raising. This is the *verifier*, and an
+    unavailable verifier must degrade to "unchecked, and said so" — not take down a build whose
+    output is fine. `check=False` alone does not achieve that: `subprocess.run` still raises
+    FileNotFoundError when the binary is missing, which would escape `verify()`, propagate out of
+    `build()`, and leave the staging file behind — breaking the idempotency guarantee for a
+    machine that simply lacks an optional tool. `_tilestats_layers` carries that contract.
+    """
+    layer = _tilestats_layers(archive)
+    if layer is None:
+        return None
+    return layer.get("layer"), layer.get("count")
