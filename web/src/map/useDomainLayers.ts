@@ -4,31 +4,32 @@ import type maplibregl from 'maplibre-gl';
 import {
   HATCH_IMAGE,
   createHatchImage,
-  filtersFor,
   layerIdsFor,
   layerIdsForMode,
+  layerIdsForYear,
   layersFor,
+  opacityUpdatesFor,
   sourceId,
 } from '@/domains/layerSpec';
 import { useTraceStore } from '@/store/useTraceStore';
 import type { TraceFeatureProperties } from '@/types/feature';
 
 /**
- * How long to wait when the map never appears to start reloading.
+ * How long to wait when no reload ever starts.
  *
- * Either the new filters changed nothing to reload, or nothing is rendering at all — a background
- * tab throttles the render loop to a stop, and the events this waits on stop with it. Both cases
- * are "there is nothing to wait for", so this is short.
+ * The normal case now: a year is applied as constant opacity, which redraws without touching tile
+ * data, so the commit is done as soon as a frame has been drawn. This only has to catch the case
+ * where no frame is drawn at all — a background tab throttles the render loop to a stop, and the
+ * events below stop with it — so it is short.
  */
 const NO_RELOAD_TIMEOUT_MS = 1500;
 
 /**
  * How long to wait once a reload has actually been seen running.
  *
- * Far longer, because here there *is* something to wait for and cutting it short is the bug this
- * whole mechanism exists to fix: the next year would be requested on top of a half-finished
- * reload, and the map would go back to rendering only whichever one happened to land last. Purely
- * a backstop against a reload that never reports finishing.
+ * Changing the year no longer causes one, but switching view still does, and cutting that short
+ * would report a year drawn while its tiles were still being rebuilt. Purely a backstop against a
+ * reload that never reports finishing.
  */
 const RELOAD_TIMEOUT_MS = 15000;
 
@@ -39,17 +40,20 @@ const RELOAD_TIMEOUT_MS = 15000;
  * layers come and go as the manifest loads and layers are toggled. Keeping them in one effect
  * would rebuild the map whenever a toggle changed.
  *
- * Sources are added once per domain and never swapped, so changing the year costs no network — that
- * is the whole reason time is a feature attribute rather than a layer.
+ * Sources are added once per domain and never swapped, and the year is applied as **opacity**, not
+ * as a filter — see `cohortFilter` in layerSpec for why the layers are split by year.
  *
- * It is not, however, free. `setFilter` routes through `Style._updateLayer` to `_reloadSource`,
- * which re-parses every loaded tile in the worker: decode, re-filter, re-tessellate. On 158k forest
- * polygons that runs well past the gap between slider ticks, and each reload supersedes the one
- * before it — which is why firing one per tick used to leave the map frozen until the slider
- * stopped, then jump straight to the final year. Every other style mutation lands in the same
- * place (a `global-state` filter, a data-driven paint property, even a visibility change), so there
- * is no cheaper channel to switch to. The committer below instead keeps at most one reload in
- * flight and coalesces whatever is requested while it runs.
+ * That distinction is the whole performance story. `setFilter` routes through `Style._updateLayer`
+ * to `_reloadSource`, which re-parses every loaded tile in the worker: decode, re-filter,
+ * re-tessellate. Every other style mutation lands in the same place — a `global-state` filter, a
+ * data-driven paint property, even a visibility change. A *constant* paint value is the one thing
+ * that does not, and cohorts are what turn the year into one.
+ *
+ * Filtering a single layer instead meant each step re-tessellated everything from the start of the
+ * range to the current year, so playback began quickly and slowed to a crawl as the accumulation
+ * grew — and before it was paced, reloads simply superseded one another and only the last year
+ * ever painted. The committer below still paces, because switching *view* does reload, and because
+ * the readout should never name a year that has not been drawn.
  */
 export function useDomainLayers(map: maplibregl.Map | null) {
   const manifest = useTraceStore((s) => s.manifest);
@@ -62,12 +66,26 @@ export function useDomainLayers(map: maplibregl.Map | null) {
 
   /** Latest year asked for. Overwritten freely; only ever read by `pump`. */
   const requested = useRef(year);
-  /** Year whose filters are currently applied, or null when that is unknown. */
+  /** Year whose opacities are currently applied, or null when that is unknown. */
   const committed = useRef<number | null>(null);
-  /** True from applying filters until the map says it has drawn them. */
+  /** True from applying opacities until the map says it has drawn them. */
   const inFlight = useRef(false);
   /** Tears down the in-flight wait without reporting it as drawn. */
   const cancelCommit = useRef<(() => void) | null>(null);
+  /**
+   * The year whose cohorts are currently painted, for handlers bound once and outliving it.
+   *
+   * Hit-testing needs it: cohorts past this year are on the map at zero opacity, so a query has to
+   * be told which ones count.
+   */
+  const painted = useRef(year);
+  /**
+   * The opacity each cohort layer was last set to.
+   *
+   * A domain owns a layer per year, and all but one or two hold the same value from one step to
+   * the next. Setting only what changed keeps a step to a couple of calls instead of hundreds.
+   */
+  const applied = useRef(new Map<string, number>());
   /**
    * The latest `pump`, for the settle handler to call.
    *
@@ -102,19 +120,22 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         const firstSymbol = map.getStyle().layers.find((layer) => layer.type === 'symbol')?.id;
         for (const layer of spec.layers) map.addLayer(layer, firstSymbol);
       } else if (!shouldBeVisible && present) {
-        for (const id of layerIdsFor(entry.id)) {
+        for (const id of layerIdsFor(entry)) {
           if (map.getLayer(id)) map.removeLayer(id);
         }
         map.removeSource(sourceId(entry.id));
+        // The layers those opacities described are gone; a stale cache would skip re-applying them
+        // to the fresh ones if the domain came back at the same year.
+        applied.current.clear();
       }
     }
-    // Adding or removing a source starts loads of its own, and an in-flight year commit waiting on
-    // `idle` cannot tell those apart from its own reload. Abandon the wait and force the next pump
-    // to re-apply, so a toggle mid-playback recovers instead of wedging.
+    // Adding or removing a source starts loads of its own, and an in-flight year commit cannot tell
+    // those apart from a reload of its own. Abandon the wait and force the next pump to re-apply,
+    // so a toggle mid-playback recovers instead of wedging.
     return () => cancelCommit.current?.();
     // `year` and the view mode are read when a layer is first added but are not dependencies:
-    // re-adding sources on every tick or toggle would refetch tiles and defeat the point of
-    // filtering. Both are applied to live layers by the effects below.
+    // re-adding sources on every tick or toggle would refetch tiles and defeat the whole point.
+    // Both are applied to live layers by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, manifest, activeDomains]);
 
@@ -126,20 +147,20 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     for (const entry of manifest.domains) {
       if (!activeDomains.has(entry.id)) continue;
 
-      const visible = new Set(layerIdsForMode(entry.id, viewModeFor(entry.id)));
-      for (const id of layerIdsFor(entry.id)) {
+      const visible = new Set(layerIdsForMode(entry, viewModeFor(entry.id)));
+      for (const id of layerIdsFor(entry)) {
         if (!map.getLayer(id)) continue;
         map.setLayoutProperty(id, 'visibility', visible.has(id) ? 'visible' : 'none');
       }
     }
   }, [map, manifest, activeDomains, viewModes, viewModeFor]);
 
-  // Commit the year to the map, one reload at a time.
+  // Commit the year to the map, one step at a time.
   //
-  // `pump` is a no-op unless the map is idle and behind, so the year effect below can call it on
+  // `pump` is a no-op unless the map is settled and behind, so the year effect below can call it on
   // every tick. Requests that arrive mid-flight are coalesced rather than queued: `requested` is
-  // simply overwritten, and the next pump jumps straight to the newest value. That is what makes a
-  // fast drag land on the year the user released on instead of grinding through the ones it passed.
+  // simply overwritten, and the next pump jumps straight to the newest value — so a fast drag lands
+  // on the year it was released on rather than grinding through the ones it passed.
   const pump = useCallback(() => {
     if (!map || !manifest) return;
     if (inFlight.current) return;
@@ -154,13 +175,17 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       if (!map.getSource(sourceId(entry.id))) continue;
       sources.push(sourceId(entry.id));
 
-      // Every layer, including the ones the current view has hidden: a hidden layer that was
-      // never re-filtered would show the wrong year the instant the toggle brought it back.
-      for (const [id, filter] of filtersFor(entry.id, target)) {
-        if (map.getLayer(id)) map.setFilter(id, filter);
+      // Every layer, including the ones the current view has hidden: a hidden layer left at the
+      // wrong opacity would show the wrong year the instant the toggle brought it back.
+      for (const [id, channel, opacity] of opacityUpdatesFor(entry, target)) {
+        if (!map.getLayer(id)) continue;
+        if (applied.current.get(id) === opacity) continue;
+        map.setPaintProperty(id, channel, opacity);
+        applied.current.set(id, opacity);
       }
     }
 
+    painted.current = target;
     committed.current = target;
     inFlight.current = true;
 
@@ -236,8 +261,8 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       if (++quietRenders >= 2) onSettled();
     }
 
-    // `sourcedata` carries the tile state changes; `render` covers the frames between them, so the
-    // brief window where the reload is running cannot slip past unobserved. Both come off again the
+    // `sourcedata` carries the tile state changes; `render` covers the frames between them, so a
+    // reload — from a view switch, since the year no longer causes one — cannot slip past. Both come off again the
     // moment the commit settles. `idle` would be the obvious signal and is deliberately not used:
     // it waits on the whole map, basemap included, so a slow or stalled basemap tile would report
     // the domain's year as undrawn long after it was drawn. These two ask only about this domain's
@@ -263,18 +288,23 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     pump();
   }, [year, pump]);
 
-  // Click to select. Bound once; the handler reads the layers present at click time.
+  // Click to select, and a pointer cursor over anything selectable. Bound once; both read the
+  // layers present and shown at the moment the pointer is over them.
   useEffect(() => {
     if (!map || !manifest) return;
 
-    const onClick = (event: maplibregl.MapMouseEvent) => {
-      // Every layer of both views. Hidden ones render nothing and so return nothing, which means
-      // this needs no knowledge of the current mode — and in the extent view a click still lands,
-      // on the baseline block or on the cleared patch that was cut out of it.
-      const layers = manifest.domains
-        .flatMap((entry) => layerIdsFor(entry.id))
+    // Cohorts for years after the one on screen are still on the map, drawn at zero opacity, and
+    // `queryRenderedFeatures` reads geometry rather than paint. Asking for every layer the domain
+    // owns would therefore let a click land on loss that has not happened yet, and open a readout
+    // describing it. Both views are still included: the hidden one renders nothing and so returns
+    // nothing, which is what lets a click work in either mode without knowing which is current.
+    const hittable = () =>
+      manifest.domains
+        .flatMap((entry) => layerIdsForYear(entry, painted.current))
         .filter((id) => map.getLayer(id));
 
+    const onClick = (event: maplibregl.MapMouseEvent) => {
+      const layers = hittable();
       if (layers.length === 0) return;
 
       const [hit] = map.queryRenderedFeatures(event.point, { layers });
@@ -289,28 +319,37 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       });
     };
 
-    const onEnter = () => {
-      map.getCanvas().style.cursor = 'pointer';
-    };
-    const onLeave = () => {
-      map.getCanvas().style.cursor = '';
+    // One mousemove rather than a mouseenter/mouseleave pair per layer, which is what this was.
+    // A domain now owns a layer per year of its coverage, so per-layer binding would mean hundreds
+    // of listeners, and they would light the cursor up over cohorts that are present but not yet
+    // shown — the same mistake as above, in the one place the reader notices before clicking.
+    //
+    // Coalesced onto a frame because the query now spans a layer per year: a high-polling mouse
+    // reports faster than the map draws, and the cursor only needs to be right once per frame.
+    let hover = 0;
+    let at: maplibregl.Point | null = null;
+
+    const onMove = (event: maplibregl.MapMouseEvent) => {
+      at = event.point;
+      if (hover) return;
+
+      hover = requestAnimationFrame(() => {
+        hover = 0;
+        if (!at) return;
+        const layers = hittable();
+        const over = layers.length > 0 && map.queryRenderedFeatures(at, { layers }).length > 0;
+        map.getCanvas().style.cursor = over ? 'pointer' : '';
+      });
     };
 
     map.on('click', onClick);
-    // Every layer of both views, matching the click handler above. Binding only the change view's
-    // fill left the extent view clickable but with no pointer cursor, so the green read as inert.
-    const hoverLayers = manifest.domains.flatMap((entry) => layerIdsFor(entry.id));
-    for (const id of hoverLayers) {
-      map.on('mouseenter', id, onEnter);
-      map.on('mouseleave', id, onLeave);
-    }
+    map.on('mousemove', onMove);
 
     return () => {
       map.off('click', onClick);
-      for (const id of hoverLayers) {
-        map.off('mouseenter', id, onEnter);
-        map.off('mouseleave', id, onLeave);
-      }
+      map.off('mousemove', onMove);
+      if (hover) cancelAnimationFrame(hover);
+      map.getCanvas().style.cursor = '';
     };
   }, [map, manifest, select]);
 }
