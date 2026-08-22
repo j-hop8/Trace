@@ -6,6 +6,7 @@ layer name the web app cannot find, a tiler that quietly discarded a slice of th
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -251,3 +252,79 @@ def test_count_features_reads_the_collection(tmp_path):
     path = tmp_path / "x.geojson"
     path.write_text(json.dumps({"type": "FeatureCollection", "features": [{}, {}, {}]}))
     assert tiles.count_features(path) == 3
+
+
+def test_change_types_are_read_from_the_archive(tmp_path, monkeypatch):
+    """The manifest must describe the tileset, not the domain's intentions."""
+    from trace_pipeline import tiles
+
+    archive = tmp_path / "forest.pmtiles"
+    archive.write_bytes(b"PMTiles")
+
+    metadata = json.dumps(
+        {
+            "tilestats": {
+                "layers": [
+                    {
+                        "layer": "forest",
+                        "count": 3,
+                        "attributes": [
+                            {"attribute": "change_type", "values": ["loss", "extent"]},
+                            {"attribute": "confidence", "values": [0.8]},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(
+        tiles.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout=metadata, stderr=""),
+    )
+
+    assert tiles.change_types_in(archive) == ("extent", "loss")
+
+
+def test_change_types_are_none_when_the_archive_cannot_be_read(tmp_path, monkeypatch):
+    """A missing verifier degrades to "unknown" so the caller can fall back, never to a guess."""
+    from trace_pipeline import tiles
+
+    monkeypatch.setattr(
+        tiles.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("pmtiles")),
+    )
+
+    assert tiles.change_types_in(tmp_path / "missing.pmtiles") is None
+
+
+def test_manifest_prefers_the_measured_change_types(tmp_path, monkeypatch):
+    """An interrupted extent pass must not leave the UI advertising an extent view."""
+    from trace_pipeline import manifest, tiles
+
+    monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+    # The tileset only got loss into it, whatever the domain class declares.
+    monkeypatch.setattr(tiles, "change_types_in", lambda archive: ("loss",))
+
+    class Declared(base.Domain):
+        id = "forest"
+        label = {"en": "Forest", "zh": "森林"}
+        change_types = ("extent", "loss")
+
+        @property
+        def source(self):
+            return base.SourceInfo("s", "v", "a", "c", "l")
+
+        @property
+        def caveat(self):
+            return "caveat"
+
+        def temporal_range(self):
+            return (2001, 2025)
+
+        def extract(self, aoi):
+            return {"type": "FeatureCollection", "features": []}
+
+    entry = manifest.build([Declared()])["domains"][0]
+    assert entry["changeTypes"] == ["loss"]

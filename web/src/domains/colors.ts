@@ -24,6 +24,26 @@ export const LOSS = '#e04b28';
 /** Stable — present in both epochs. Muted so it recedes behind the thing that changed. */
 export const STABLE = '#94a3b8';
 
+/**
+ * Bare ground — what is left where a domain's extent has been taken away.
+ *
+ * The extent view answers "how much is left" by drawing the baseline and removing everything lost
+ * by the selected year. MapLibre fills cannot subtract, so the lost patches are painted over the
+ * extent in the colour of the ground beneath, and the holes are what remains visible.
+ *
+ * This tracks the basemap's `earth` fill in `map/basemap/style.json`. It is duplicated here rather
+ * than imported because this module is the only place in `web/` allowed to hold a colour literal
+ * for data — but if the basemap's ground changes, this changes with it, or the holes stop looking
+ * like holes.
+ *
+ * Exact only over bare earth. The basemap paints `landcover` and `landuse` over it at partial
+ * opacity, so above those a hole is a few RGB units darker than the ground beside it — visible, if
+ * at all, at high zoom over valley floors. Matching them properly would mean drawing the domain
+ * layers underneath those two, which would also put them over the extent fill and tint the whole
+ * layer; the seam is the cheaper of the two errors.
+ */
+export const CLEARED = '#2a2724';
+
 /** How a feature is drawn. Colour and its accessible pairing always travel together. */
 export interface FeatureStyle {
   /** Fill colour. */
@@ -53,7 +73,12 @@ export function styleFor(hue: string, changeType: ChangeType): FeatureStyle {
   switch (changeType) {
     case 'loss':
       return { color: LOSS, pattern: 'hatch', stroke: '#a3300f' };
-    // Gain is the domain colour returning — the subject coming back is shown as the subject.
+    // Extent and gain are both *the subject itself* — where it is, and where it came back — so
+    // both take the domain hue. They stay separate cases because they answer different questions
+    // and a later design may want to tell them apart; the shared colour is a decision, not an
+    // accident of falling through.
+    case 'extent':
+      return { color: hue, pattern: null, stroke: darken(hue, 0.25) };
     case 'gain':
       return { color: hue, pattern: null, stroke: darken(hue, 0.25) };
     case 'stable':

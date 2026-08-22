@@ -124,7 +124,7 @@ def test_caveat_reports_retained_share_not_only_the_threshold():
 
 
 def test_manifest_entry_is_well_formed():
-    entry = forest.ForestDomain().manifest_entry("pmtiles:///data/forest.pmtiles")
+    entry = forest.ForestDomain().manifest_entry("pmtiles:///data/forest.pmtiles", ("loss",))
 
     assert entry["temporal"] == {"start": 2001, "end": 2025}
     assert entry["hue"] == config.DOMAIN_HUES["forest"]

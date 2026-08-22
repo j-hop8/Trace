@@ -4,13 +4,11 @@ import type maplibregl from 'maplibre-gl';
 import {
   HATCH_IMAGE,
   createHatchImage,
-  fillLayerId,
-  hatchLayerId,
+  filtersFor,
   layerIdsFor,
+  layerIdsForMode,
   layersFor,
-  outlineLayerId,
   sourceId,
-  timeFilter,
 } from '@/domains/layerSpec';
 import { useTraceStore } from '@/store/useTraceStore';
 import type { TraceFeatureProperties } from '@/types/feature';
@@ -29,6 +27,8 @@ import type { TraceFeatureProperties } from '@/types/feature';
 export function useDomainLayers(map: maplibregl.Map | null) {
   const manifest = useTraceStore((s) => s.manifest);
   const activeDomains = useTraceStore((s) => s.activeDomains);
+  const viewModes = useTraceStore((s) => s.viewModes);
+  const viewModeFor = useTraceStore((s) => s.viewModeFor);
   const year = useTraceStore((s) => s.year);
   const select = useTraceStore((s) => s.select);
 
@@ -49,9 +49,14 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       const present = Boolean(map.getSource(sourceId(entry.id)));
 
       if (shouldBeVisible && !present) {
-        const spec = layersFor(entry, year);
+        const spec = layersFor(entry, year, viewModeFor(entry.id));
         map.addSource(spec.sourceId, spec.source);
-        for (const layer of spec.layers) map.addLayer(layer);
+        // Under the basemap's labels, not over them. Appending with no `beforeId` puts data on
+        // top of everything, and the extent view is a near-solid mass -- it covered every place
+        // name in the central range, so the reader could see the forest and not where it was.
+        // Found by type rather than by id so it survives a basemap whose label layer is renamed.
+        const firstSymbol = map.getStyle().layers.find((layer) => layer.type === 'symbol')?.id;
+        for (const layer of spec.layers) map.addLayer(layer, firstSymbol);
       } else if (!shouldBeVisible && present) {
         for (const id of layerIdsFor(entry.id)) {
           if (map.getLayer(id)) map.removeLayer(id);
@@ -59,26 +64,39 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         map.removeSource(sourceId(entry.id));
       }
     }
-    // `year` is read when a layer is first added but is not a dependency: re-adding sources on
-    // every tick would refetch tiles and defeat the point of filtering.
+    // `year` and the view mode are read when a layer is first added but are not dependencies:
+    // re-adding sources on every tick or toggle would refetch tiles and defeat the point of
+    // filtering. Both are applied to live layers by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, manifest, activeDomains]);
+
+  // Apply the view mode. Both views' layers already exist, so this is a visibility switch — no
+  // source churn, no refetch, and the toggle is instant.
+  useEffect(() => {
+    if (!map || !manifest) return;
+
+    for (const entry of manifest.domains) {
+      if (!activeDomains.has(entry.id)) continue;
+
+      const visible = new Set(layerIdsForMode(entry.id, viewModeFor(entry.id)));
+      for (const id of layerIdsFor(entry.id)) {
+        if (!map.getLayer(id)) continue;
+        map.setLayoutProperty(id, 'visibility', visible.has(id) ? 'visible' : 'none');
+      }
+    }
+  }, [map, manifest, activeDomains, viewModes, viewModeFor]);
 
   // Apply the year. Cheap enough to run on every slider tick.
   useEffect(() => {
     if (!map || !manifest) return;
-    const filter = timeFilter(year);
 
     for (const entry of manifest.domains) {
       if (!activeDomains.has(entry.id)) continue;
-      if (map.getLayer(fillLayerId(entry.id))) map.setFilter(fillLayerId(entry.id), filter);
-      if (map.getLayer(outlineLayerId(entry.id))) map.setFilter(outlineLayerId(entry.id), filter);
-      if (map.getLayer(hatchLayerId(entry.id))) {
-        map.setFilter(hatchLayerId(entry.id), [
-          'all',
-          filter,
-          ['==', ['get', 'change_type'], 'loss'],
-        ] as never);
+
+      // Every layer, including the ones the current view has hidden: a hidden layer that was
+      // never re-filtered would show the wrong year the instant the toggle brought it back.
+      for (const [id, filter] of filtersFor(entry.id, year)) {
+        if (map.getLayer(id)) map.setFilter(id, filter);
       }
     }
   }, [map, manifest, activeDomains, year]);
@@ -88,8 +106,11 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     if (!map || !manifest) return;
 
     const onClick = (event: maplibregl.MapMouseEvent) => {
+      // Every layer of both views. Hidden ones render nothing and so return nothing, which means
+      // this needs no knowledge of the current mode — and in the extent view a click still lands,
+      // on the baseline block or on the cleared patch that was cut out of it.
       const layers = manifest.domains
-        .flatMap((entry) => [fillLayerId(entry.id), hatchLayerId(entry.id)])
+        .flatMap((entry) => layerIdsFor(entry.id))
         .filter((id) => map.getLayer(id));
 
       if (layers.length === 0) return;
@@ -114,16 +135,19 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     };
 
     map.on('click', onClick);
-    for (const entry of manifest.domains) {
-      map.on('mouseenter', fillLayerId(entry.id), onEnter);
-      map.on('mouseleave', fillLayerId(entry.id), onLeave);
+    // Every layer of both views, matching the click handler above. Binding only the change view's
+    // fill left the extent view clickable but with no pointer cursor, so the green read as inert.
+    const hoverLayers = manifest.domains.flatMap((entry) => layerIdsFor(entry.id));
+    for (const id of hoverLayers) {
+      map.on('mouseenter', id, onEnter);
+      map.on('mouseleave', id, onLeave);
     }
 
     return () => {
       map.off('click', onClick);
-      for (const entry of manifest.domains) {
-        map.off('mouseenter', fillLayerId(entry.id), onEnter);
-        map.off('mouseleave', fillLayerId(entry.id), onLeave);
+      for (const id of hoverLayers) {
+        map.off('mouseenter', id, onEnter);
+        map.off('mouseleave', id, onLeave);
       }
     };
   }, [map, manifest, select]);

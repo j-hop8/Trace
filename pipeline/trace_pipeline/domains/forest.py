@@ -21,10 +21,30 @@ from trace_pipeline.domains.base import Domain, SourceInfo, register
 
 METHOD = "Hansen lossyear"
 
+#: The baseline extent pass: where forest *was* in 2000, as opposed to what has gone since.
+EXTENT_METHOD = "Hansen treecover2000"
+
 #: Hansen's own accuracy figures are per-biome and not per-pixel, so a single flat value is the
 #: honest thing to carry rather than a fabricated per-feature score. Sub-1.0 because 30 m pixels
 #: over Taiwan's steep, cloud-prone terrain are not certainties.
 CONFIDENCE = 0.8
+
+#: The extent pass is chunked over an N x N grid of the AOI, because one request cannot carry it.
+#:
+#: Loss chunks by year; extent has no year to chunk on, so the split has to be spatial -- and a
+#: spatial split is a genuine cost, not a free one: a forest block straddling a cell edge comes
+#: back as two features, so `area_ha` on an extent polygon describes the piece inside that cell
+#: rather than the whole block. Hence the coarsest grid that works, found by measurement against
+#: the central range (the densest, worst case):
+#:
+#:   2x2, 3x3 -> HTTP 400, request too large
+#:   4x4      -> 11,889 features / 22 MB / 13 s  <- chosen
+#:   6x6      ->  5,902 features / 11 MB /  8 s
+#:
+#: The consequence to remember: an extent polygon's `area_ha` is the area of a *block as this grid
+#: cut it*, so summing extent areas is not a way to measure island-wide forest. Any total the UI
+#: ever quotes has to be measured in the pipeline, not added up from features.
+EXTENT_GRID = 4
 
 
 def loss_year_to_calendar(band_value: int) -> int:
@@ -73,10 +93,34 @@ def build_feature(geometry: dict[str, Any], calendar_year: int, area_ha: float) 
     return feature.to_geojson_feature(geometry)
 
 
+def build_extent_feature(geometry: dict[str, Any], area_ha: float) -> dict[str, Any]:
+    """Assemble one B4 feature from a vectorized baseline-forest block.
+
+    `valid_from` is the baseline year, not the first loss year: this is the state Hansen observed
+    in 2000, and the loss features are what happens to it afterwards. `valid_to` is None for the
+    same reason loss patches carry None -- the baseline is not observed to end, it is eroded, and
+    the erosion is carried by the loss features rather than by shrinking this one.
+    """
+    from trace_pipeline.schema import TraceFeature
+
+    feature = TraceFeature(
+        domain=ForestDomain.id,
+        valid_from=config.HANSEN_BASELINE_YEAR,
+        valid_to=None,
+        change_type="extent",
+        metric={"area_ha": round(area_ha, 4)},
+        source=config.HANSEN_ASSET,
+        method=EXTENT_METHOD,
+        confidence=CONFIDENCE,
+    )
+    return feature.to_geojson_feature(geometry)
+
+
 @register
 class ForestDomain(Domain):
     id = "forest"
     label = {"en": "Forest", "zh": "森林"}
+    change_types = ("extent", "loss")
 
     @property
     def source(self) -> SourceInfo:
@@ -103,7 +147,16 @@ class ForestDomain(Domain):
             f"{config.NATIVE_SCALE_M} m resolution. Isolated single pixels (under about "
             f"{config.MIN_PATCH_PIXELS * config.TAIWAN_PIXEL_HA:.2f} ha) are not mapped, so this "
             f"shows about {config.FOREST_RETAINED_PCT:.0f}% of the tree-cover loss the source "
-            "records for Taiwan."
+            "records for Taiwan. "
+            # The cover view is derived, not observed, and saying so is the whole point. Both
+            # errors are stated because they run in opposite directions and a reader who knows
+            # only one of them would draw the wrong conclusion about which way the estimate is off.
+            f"The cover view draws the {config.HANSEN_BASELINE_YEAR} baseline with mapped loss "
+            "removed, so it is an estimate of what remains rather than a fresh observation of it: "
+            "regrowth is not added back (Hansen's gain band ends in 2012 and is not comparable "
+            "year for year), and the unmapped loss above is not taken out. The baseline itself "
+            f"passes the same single-pixel sieve and retains about "
+            f"{config.FOREST_EXTENT_RETAINED_PCT:.1f}% of the canopy area the source records."
         )
 
     def temporal_range(self) -> tuple[int, int]:
@@ -157,6 +210,87 @@ class ForestDomain(Domain):
 
         return vectors.map(tag_area)
 
+    def extent_grid_cells(self, aoi: Any) -> list[Any]:
+        """The AOI split into EXTENT_GRID x EXTENT_GRID rectangles, in row-major order."""
+        import ee
+
+        west, south, east, north = config.TAIWAN_BBOX
+        width = (east - west) / EXTENT_GRID
+        height = (north - south) / EXTENT_GRID
+
+        cells = []
+        for row in range(EXTENT_GRID):
+            for col in range(EXTENT_GRID):
+                cells.append(
+                    ee.Geometry.Rectangle(
+                        [
+                            west + col * width,
+                            south + row * height,
+                            west + (col + 1) * width,
+                            south + (row + 1) * height,
+                        ]
+                    ).intersection(aoi, maxError=1)
+                )
+        return cells
+
+    def extent_blocks_for_cell(self, cell: Any) -> Any:
+        """The ee.FeatureCollection of baseline-forest polygons inside one grid cell.
+
+        Deliberately the same shape as :meth:`loss_patches_for_year`: clip first, sieve on
+        connected-component size on the native grid, then vectorize. Sharing the sieve matters --
+        extent and loss have to agree about what counts as forest, or the loss patches would punch
+        holes in a baseline that never claimed those pixels in the first place.
+        """
+        import ee
+
+        image = ee.Image(config.HANSEN_ASSET).clip(cell)
+        forest_2000 = image.select("treecover2000").gte(config.TREECOVER_THRESHOLD_PCT).selfMask()
+
+        native = image.select("treecover2000").projection()
+
+        component_size = forest_2000.connectedPixelCount(maxSize=16, eightConnected=False)
+        kept = forest_2000.updateMask(component_size.gte(config.MIN_PATCH_PIXELS))
+
+        vectors = kept.reduceToVectors(
+            geometry=cell,
+            crs=native,
+            geometryType="polygon",
+            eightConnected=False,
+            maxPixels=int(1e10),
+        )
+
+        def tag_area(feature: Any) -> Any:
+            area_ha = feature.geometry().area(maxError=1).divide(config.M2_PER_HA)
+            return feature.set("area_ha", area_ha)
+
+        return vectors.map(tag_area)
+
+    def extract_extent(self, aoi: Any) -> list[dict[str, Any]]:
+        """Baseline forest extent, one request per grid cell."""
+        features: list[dict[str, Any]] = []
+
+        for index, cell in enumerate(self.extent_grid_cells(aoi), start=1):
+            collection = self.extent_blocks_for_cell(cell)
+            raw = extract.download_features(
+                collection, description=f"forest extent cell {index}/{EXTENT_GRID**2}"
+            )
+
+            for item in raw:
+                features.append(
+                    build_extent_feature(
+                        geometry=item["geometry"],
+                        area_ha=item["properties"]["area_ha"],
+                    )
+                )
+
+            print(
+                f"  extent cell {index}/{EXTENT_GRID**2}: {len(raw):,} blocks "
+                f"(running total {len(features):,})",
+                flush=True,
+            )
+
+        return features
+
     def extract(self, aoi: Any) -> dict[str, Any]:
         features: list[dict[str, Any]] = []
         first, last = self.temporal_range()
@@ -179,5 +313,11 @@ class ForestDomain(Domain):
                 f"  {calendar_year}: {len(raw):,} patches (running total {len(features):,})",
                 flush=True,
             )
+
+        # Extent last because it is the newer, riskier pass -- but note this buys less than it
+        # looks like: `extract.run` writes nothing until this method returns, so a failure here
+        # still discards the loss features built above and the whole domain must be re-extracted.
+        # Only the previously written file on disk is protected, and that by `write_features`.
+        features.extend(self.extract_extent(aoi))
 
         return {"type": "FeatureCollection", "features": features}

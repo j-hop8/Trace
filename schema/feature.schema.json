@@ -71,8 +71,8 @@
         },
 
         "change_type": {
-          "description": "The universal change signal. Rendering colour is a pure function of (domain, change_type): extent uses the domain hue, loss uses the cross-domain red/amber.",
-          "enum": ["gain", "loss", "stable"]
+          "description": "The universal change signal. Rendering colour is a pure function of (domain, change_type): extent uses the domain hue, loss uses the cross-domain red/amber. `extent` is the odd one out — it is not a change but the baseline state the changes are measured against, and it is what lets a domain answer \"how much is left\" as well as \"what moved\".",
+          "enum": ["extent", "gain", "loss", "stable"]
         },
 
         "metric": {

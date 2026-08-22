@@ -17,6 +17,20 @@ function formatArea(hectares: number | undefined): string | null {
   return `${hectares.toLocaleString(undefined, { maximumFractionDigits: 1 })} ha`;
 }
 
+/**
+ * Whether this feature's `area_ha` describes a real thing, or an artefact of how it was cut.
+ *
+ * Extent blocks are vectorised over a spatial grid (see `EXTENT_GRID` in the forest pipeline), so
+ * a block straddling a cell edge comes back as two features and its area is the piece inside that
+ * cell. The number is a true geodesic area of the polygon, but the polygon's boundary is partly an
+ * extraction detail — quoting it as "this forest: 198,830 ha" states a fact about the chunking as
+ * though it were a fact about the forest. Loss patches have no such problem: their boundaries are
+ * the boundaries of the thing that was lost.
+ */
+function areaIsMeaningful(props: TraceFeatureProperties): boolean {
+  return props.change_type !== 'extent';
+}
+
 /** The one-line story: what this is, when it changed, and by how much. */
 function sentence(props: TraceFeatureProperties, area: string | null): string {
   const from = props.valid_from;
@@ -29,12 +43,18 @@ function sentence(props: TraceFeatureProperties, area: string | null): string {
         : `lost in ${from}`
       : props.change_type === 'gain'
         ? `appeared in ${from}`
-        : to
-          ? `present ${from}–${to}`
-          : `present since ${from}`;
+        : // Extent is an observation of one year, not a claim about every year since. "Present
+          // since 2000" would say this block is still standing, which is exactly what the loss
+          // features exist to contradict.
+          props.change_type === 'extent'
+          ? `mapped at the ${from} baseline`
+          : to
+            ? `present ${from}–${to}`
+            : `present since ${from}`;
 
   const subject = props.subtype ?? props.domain;
-  return area ? `This ${subject}: ${when}, ${area}.` : `This ${subject}: ${when}.`;
+  const quotable = area && areaIsMeaningful(props) ? area : null;
+  return quotable ? `This ${subject}: ${when}, ${quotable}.` : `This ${subject}: ${when}.`;
 }
 
 export default function FeatureReadout() {
@@ -62,6 +82,15 @@ export default function FeatureReadout() {
         </button>
       </div>
 
+      {/* Say why the number is missing. An absent area otherwise looks like data that failed to
+          load, and the reader has no way to tell that from a number deliberately withheld. */}
+      {area && !areaIsMeaningful(props) && (
+        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+          No area given: baseline blocks are cut by the extraction grid, so one block&rsquo;s size
+          is partly an artefact of where that grid fell.
+        </p>
+      )}
+
       <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[11px] text-slate-400">
         <dt className="text-slate-600">source</dt>
         <dd className="truncate" title={props.source}>
@@ -70,8 +99,13 @@ export default function FeatureReadout() {
         <dt className="text-slate-600">method</dt>
         <dd>{props.method}</dd>
         <dt className="text-slate-600">confidence</dt>
-        {/* Surfaced rather than smoothed over (A5) — a number the reader can weigh. */}
-        <dd>{props.confidence.toFixed(2)}</dd>
+        {/*
+          Surfaced rather than smoothed over (A5) — a number the reader can weigh. Guarded because
+          these properties are an unchecked cast of raw tile attributes: tiling drops nulls (which
+          is why the time filter has to test `has`), so a domain that omitted this would throw
+          inside render and take the whole app down rather than losing one line of a panel.
+        */}
+        <dd>{typeof props.confidence === 'number' ? props.confidence.toFixed(2) : '—'}</dd>
       </dl>
 
       {entry && (
