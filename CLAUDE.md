@@ -8,7 +8,7 @@ full design and build proposal.
 
 | | Pipeline (`pipeline/`) | Web (`web/`) |
 |---|---|---|
-| Test | `pytest` | — |
+| Test | `pytest` | `npm test` |
 | Lint | `ruff check .` | — |
 | Format | `ruff format .` | `prettier --write .` |
 | Typecheck | — | `npm run typecheck` |
@@ -77,7 +77,7 @@ This repo follows the global Claude+Codex standard (~/.claude/CLAUDE.md, ~/.code
 - Tickets: `.agents/tickets/T-xxx-<slug>.md` (template: `_template.md`). Done → `.agents/tickets/done/`.
 - Branches: `claude/T-xxx-slug` | `codex/T-xxx-slug`. Commits: `claude:` / `codex:` prefix.
 - All merges to main via squash PR. Codex worktrees live in `.worktrees/` (gitignored).
-- Test: `cd pipeline && pytest` · Lint: `ruff check .` · Format: `ruff format .` / `prettier --write .`
+- Test: `cd pipeline && pytest` / `cd web && npm test` · Lint: `ruff check .` · Format: `ruff format .` / `prettier --write .`
 
 ## Gotchas
 
