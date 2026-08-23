@@ -24,6 +24,17 @@ interface TraceState {
   activeDomains: Set<DomainId>;
 
   /**
+   * Domain ids that are switched on but whose tiles are not on screen yet.
+   *
+   * Separate from `activeDomains` because they answer different questions: one is what the reader
+   * asked for, the other is what has arrived. Forest is 7.5 MB against the basemap's 498 KB at the
+   * opening view, and its layers are deliberately held back until the basemap has painted, so there
+   * is a real window where a layer is on and showing nothing. Saying so beats an empty map that
+   * looks identical to a layer with no data.
+   */
+  loadingDomains: Set<DomainId>;
+
+  /**
    * Which question each domain is answering — see `ViewMode`.
    *
    * Per domain rather than global: with water and forest both on, one may be worth reading as
@@ -57,6 +68,7 @@ interface TraceState {
   toggleDomain: (id: DomainId) => void;
   setViewMode: (id: DomainId, mode: ViewMode) => void;
   viewModeFor: (id: DomainId) => ViewMode;
+  setLoadingDomains: (ids: Set<DomainId>) => void;
   setYear: (year: number) => void;
   /** Called by the map once a requested year is on screen. */
   setRenderedYear: (year: number) => void;
@@ -86,6 +98,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   manifest: null,
   manifestError: null,
   activeDomains: new Set(),
+  loadingDomains: new Set(),
   viewModes: new Map(),
   year: new Date().getFullYear(),
   renderedYear: new Date().getFullYear(),
@@ -110,6 +123,10 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       // Everything on by default: the point of the map is the comparison, and a user who has to
       // switch layers on before seeing anything has to already know what to look for.
       activeDomains: new Set(manifest.domains.map((d) => d.id)),
+      // ...and none of it has arrived yet. Not a guess: the layers are deliberately held back until
+      // the basemap has painted, so at this instant every domain is genuinely switched on and
+      // showing nothing. The map clears these as each source finishes loading.
+      loadingDomains: new Set(manifest.domains.map((d) => d.id)),
       // Start at the most recent year any domain covers, so the first paint shows the present
       // rather than an arbitrary midpoint.
       year: Number.isFinite(latest) ? latest : new Date().getFullYear(),
@@ -129,8 +146,13 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       }
       // A selection belonging to a domain that just went dark would leave an orphaned readout.
       const keepSelection = state.selected && next.has(state.selected.properties.domain);
+      const loading = new Set([...state.loadingDomains].filter((domain) => next.has(domain)));
+
       return {
         activeDomains: next,
+        // A domain switched off is not loading. Left in, it would come back wearing the badge
+        // until the next `sourcedata` happened to correct it.
+        loadingDomains: loading,
         selected: keepSelection ? state.selected : null,
         // Toggling a layer changes the slider's bounds, and an unclamped year then disagrees with
         // both the thumb and the map: the slider clamps only what it *displays*, so a year of
@@ -156,6 +178,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
 
   viewModeFor: (id) => get().viewModes.get(id) ?? 'change',
 
+  setLoadingDomains: (loadingDomains) => set({ loadingDomains }),
   setYear: (year) => set({ year }),
   setRenderedYear: (renderedYear) => set({ renderedYear }),
   setPlaying: (playing) => set({ playing }),
