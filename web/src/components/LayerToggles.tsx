@@ -32,6 +32,7 @@ const VIEW_LABELS: Record<ViewMode, { zh: string; title: (entry: DomainManifestE
 export default function LayerToggles() {
   const manifest = useTraceStore((s) => s.manifest);
   const activeDomains = useTraceStore((s) => s.activeDomains);
+  const loadingDomains = useTraceStore((s) => s.loadingDomains);
   // The drawn year, not the requested one, so this badge and the slider's readout never disagree
   // about which year the map is showing.
   const year = useTraceStore((s) => s.renderedYear);
@@ -47,6 +48,7 @@ export default function LayerToggles() {
     <ul className="pointer-events-auto flex flex-col gap-2">
       {manifest.domains.map((domain) => {
         const active = activeDomains.has(domain.id);
+        const loading = loadingDomains.has(domain.id);
         const hasData = coversYear(domain, year);
         const mode = viewModes.get(domain.id) ?? 'change';
         // Only where the tileset carries both a baseline and something that changed — see
@@ -79,7 +81,22 @@ export default function LayerToggles() {
               <span className="font-mono text-[11px] text-slate-500">
                 {domain.temporal.start}–{domain.temporal.end}
               </span>
-              {active && !hasData && (
+              {/*
+                Loading wins over "no data": until the tiles are here, whether this year has
+                anything in them is not yet known, and saying "no data" would be a guess that
+                happens to be wrong most of the time.
+
+                Slate rather than the amber below — amber is reserved for a layer that genuinely
+                has nothing to show, and waiting is not that. The pulse carries "working" without
+                needing an image.
+              */}
+              {active && loading && (
+                <span className="ml-auto animate-pulse rounded bg-ink-800/80 px-1.5 py-0.5 text-[10px] text-slate-400">
+                  載入中
+                </span>
+              )}
+
+              {active && !loading && !hasData && (
                 <span className="ml-auto rounded bg-amber-950/70 px-1.5 py-0.5 text-[10px] text-amber-300">
                   no data {year}
                 </span>
