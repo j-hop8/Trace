@@ -117,22 +117,29 @@ export function useDomainLayers(map: maplibregl.Map | null) {
 
   useEffect(() => {
     if (!map) return;
+    // Reset for this map instance: `basemapPainted` otherwise carries a stale `true` forward if
+    // the map is ever rebuilt, letting domain layers straight onto a fresh, unpainted map.
+    setBasemapPainted(false);
 
-    let settled = false;
     let timer = 0;
 
     const done = () => {
-      if (settled) return;
-      settled = true;
       window.clearTimeout(timer);
       map.off('idle', done);
       setBasemapPainted(true);
     };
 
     // Nothing but the basemap is on the map yet, so `idle` here means exactly what it needs to:
-    // the basemap has finished loading and has been drawn.
-    map.on('idle', done);
-    timer = window.setTimeout(done, FIRST_PAINT_GRACE_MS);
+    // the basemap has finished loading and has been drawn. `map.once` rather than a hand-rolled
+    // guard: it is already a self-removing one-time listener, so calling `done` twice — once from
+    // `idle`, once from the timeout racing it — is harmless without one.
+    map.once('idle', done);
+    // The map may already be idle by the time this effect runs: `map` is only handed down after
+    // MapCanvas's own `styledata`/`load` handler fires, a render cycle before this subscribes, and
+    // a fast or cached basemap can finish inside that gap. Asking directly closes the race instead
+    // of paying the full grace period on the connections that need it least.
+    if (map.loaded()) done();
+    else timer = window.setTimeout(done, FIRST_PAINT_GRACE_MS);
 
     return () => {
       map.off('idle', done);
@@ -197,16 +204,33 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   useEffect(() => {
     if (!map || !manifest) return;
 
-    const update = () => {
+    // Domains that have been seen fully loaded once. Bounds the badge to those same two windows:
+    // without this, a later `sourcedata` event from panning into fresh tiles for an already-loaded
+    // domain would flip the badge back on for data the reader has already been looking at.
+    const everLoaded = new Set<DomainId>();
+    const domainSourceIds = new Map(
+      manifest.domains.map((entry) => [sourceId(entry.id), entry.id]),
+    );
+
+    const update = (e?: maplibregl.MapSourceDataEvent) => {
+      // Most `sourcedata` events name the one source that changed; ignore it outright if that
+      // source belongs to no domain, rather than re-checking every active domain for nothing.
+      if (e?.sourceId && !domainSourceIds.has(e.sourceId)) return;
+
       const loading = new Set<DomainId>();
 
       for (const entry of manifest.domains) {
         if (!activeDomains.has(entry.id)) continue;
+        if (everLoaded.has(entry.id)) continue;
 
         const id = sourceId(entry.id);
         // `getSource` first: `isSourceLoaded` raises an error event for a source the map does not
         // have, which during the grace period is every one of them.
-        if (!map.getSource(id) || !map.isSourceLoaded(id)) loading.add(entry.id);
+        if (!map.getSource(id) || !map.isSourceLoaded(id)) {
+          loading.add(entry.id);
+        } else {
+          everLoaded.add(entry.id);
+        }
       }
 
       // Written only when the membership actually changed. `sourcedata` fires per tile, and a fresh
