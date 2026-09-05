@@ -171,6 +171,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     if (committed.current === target) return;
 
     const sources: string[] = [];
+    let changed = false;
 
     for (const entry of manifest.domains) {
       if (!activeDomains.has(entry.id)) continue;
@@ -184,11 +185,24 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         if (applied.current.get(id) === opacity) continue;
         map.setPaintProperty(id, channel, opacity);
         applied.current.set(id, opacity);
+        changed = true;
       }
     }
 
     painted.current = target;
     committed.current = target;
+
+    // Every active domain's cohorts already sit at their `target` opacity — reachable when a
+    // domain is toggled off and the target is a year every *remaining* domain was already fully
+    // painted through. Nothing was set, so nothing will dirty a frame: waiting on a render event
+    // here would wait for one that is never coming, settling only once `NO_RELOAD_TIMEOUT_MS`
+    // gives up.
+    if (!changed) {
+      setRenderedYear(target);
+      pumpAgain.current();
+      return;
+    }
+
     inFlight.current = true;
 
     let settled = false;

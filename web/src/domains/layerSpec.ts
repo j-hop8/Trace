@@ -255,6 +255,9 @@ const ROLES = [
 const cohortLayerId = (domainId: string, key: string, cohort: number) =>
   `trace-${domainId}-${key}-${cohort}`;
 
+/** What a role's `paint(entry)` returns: enough to derive its opacity channel and draw it. */
+type BuiltRole = { type: 'fill' | 'line'; paint: Record<string, unknown> };
+
 /**
  * The opacity channel a role is animated through, and the value it holds when shown.
  *
@@ -263,7 +266,7 @@ const cohortLayerId = (domainId: string, key: string, cohort: number) =>
  * therefore declare a plain number: an expression here would be data-driven, and a data-driven
  * paint property is exactly the thing that forces the reload this design exists to avoid.
  */
-export function opacityChannel(built: { type: 'fill' | 'line'; paint: Record<string, unknown> }): {
+export function opacityChannel(built: BuiltRole): {
   key: string;
   shown: number;
 } {
@@ -285,18 +288,23 @@ export function opacityChannel(built: { type: 'fill' | 'line'; paint: Record<str
  * pairs, and their output never changes for the life of a manifest. `opacityUpdatesFor` calls this
  * once per role on every single year commit, so leaving it uncached meant reconstructing every
  * role's full paint object on every tick of playback just to read back one constant.
+ *
+ * Keyed on the `entry` object itself, not `entry.id`: a manifest that is ever replaced hands every
+ * domain a fresh entry object, so the old one's cache entries simply become unreachable rather than
+ * shadowing a same-id domain that has since changed hue or anything else `role.paint` reads.
  */
-const builtCache = new Map<string, { type: 'fill' | 'line'; paint: Record<string, unknown> }>();
+const builtCache = new WeakMap<DomainManifestEntry, Map<string, BuiltRole>>();
 
-function builtFor(
-  entry: DomainManifestEntry,
-  role: (typeof ROLES)[number],
-): { type: 'fill' | 'line'; paint: Record<string, unknown> } {
-  const cacheKey = `${entry.id}:${role.key}`;
-  let built = builtCache.get(cacheKey);
+function builtFor(entry: DomainManifestEntry, role: (typeof ROLES)[number]): BuiltRole {
+  let perEntry = builtCache.get(entry);
+  if (!perEntry) {
+    perEntry = new Map();
+    builtCache.set(entry, perEntry);
+  }
+  let built = perEntry.get(role.key);
   if (!built) {
     built = role.paint(entry);
-    builtCache.set(cacheKey, built);
+    perEntry.set(role.key, built);
   }
   return built;
 }
