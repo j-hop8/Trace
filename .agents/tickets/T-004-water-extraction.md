@@ -26,15 +26,18 @@ the slider. Do not hardcode 2024 and hope. Log which path was taken.
    persists to the end, "gain" where it began after the first.
 
 **Acceptance criteria:**
-- [ ] `WaterDomain` subclasses `Domain`, is `@register`ed.
-- [ ] `valid_from` = first water year, `valid_to` = last water year, or `null` if still water in
+- [x] `WaterDomain` subclasses `Domain`, is `@register`ed.
+- [x] `valid_from` = first water year, `valid_to` = last water year, or `null` if still water in
       the final observed year.
-- [ ] `caveat` names the 30 m floor and that small 埤塘 may be missed.
-- [ ] A test proves the v1.5-unavailable path yields `temporal_range() == (1984, 2021)` and does
+- [x] `caveat` names the 30 m floor and that small 埤塘 may be missed.
+- [x] A test proves the v1.5-unavailable path yields `temporal_range() == (1984, 2021)` and does
       not raise.
-- [ ] Report the polygon count and which GSW version was used.
-- [ ] Sanity check the result against a known case: Taoyuan's 埤塘 ponds (~121.216, 24.993) should
-      show pond loss over the period, not an empty result.
+- [x] Report the polygon count and which GSW version was used — 30,606 features, GSW v1.4
+      (`JRC/GSW1_4/YearlyHistory`); v1.5 probed live and confirmed genuinely inaccessible
+      (`ImageCollection asset ... not found`), so this run took the fallback path for real, not
+      just in a mock.
+- [x] Sanity check the result against a known case: Taoyuan's 埤塘 ponds (~121.216, 24.993) —
+      57 loss features within ~5 km, 2–3 ha each, matching typical pond size.
 
 **Verify:** `cd pipeline && pytest && ruff check .`
 **Owner:** claude

@@ -64,6 +64,19 @@ MIN_PATCH_PIXELS = 2
 #: real extraction measures JRC's actual grid.
 WATER_PIXEL_HA = 0.071
 
+#: The AOI is split into a WATER_GRID x WATER_GRID grid before extracting, for the same reason as
+#: forest's `EXTENT_GRID`: one request over the whole island cannot carry it. Measured directly —
+#: a ~0.98 deg² slice of northern Taiwan (the country's densest water region) took 53 s for 6,823
+#: features; the full AOI is roughly 9.8x that area, comfortably past what one synchronous request
+#: should be asked to do. Water's per-pixel cost is higher than forest's (a 38-year stack reduction
+#: plus a `reduceRegions` join, against forest's single boolean mask), so this starts at the same
+#: grid forest uses for its own extent pass rather than assuming a coarser one would do.
+#:
+#: The consequence to remember, same as forest's: a water body straddling a cell edge comes back
+#: as two features, so `area_ha` on a patch describes the piece inside its own cell, not the whole
+#: body. Summing areas from these features is therefore not a way to measure island-wide water.
+WATER_GRID = 4
+
 
 def gsw_v15_reachable() -> bool:
     """Whether the project-hosted v1.5 asset can actually be read right now.
@@ -258,24 +271,62 @@ class WaterDomain(Domain):
 
         return first_year.addBands(last_year).addBands(transition).clip(aoi)
 
-    def extract(self, aoi: Any) -> dict[str, Any]:
+    def grid_cells(self, aoi: Any) -> list[Any]:
+        """`aoi` split into `WATER_GRID` x `WATER_GRID` rectangles, in row-major order.
+
+        Same shape as forest's `extent_grid_cells`, over `config.TAIWAN_BBOX` rather than
+        whatever `aoi` was passed — the grid is a fixed partition of the island regardless of
+        which sub-area extraction is asked for.
+        """
         import ee
 
-        from trace_pipeline import extract
+        west, south, east, north = config.TAIWAN_BBOX
+        width = (east - west) / WATER_GRID
+        height = (north - south) / WATER_GRID
 
-        first, last, asset = self._resolve()
-        stats = self.water_stats_image(aoi)
-        ever_water = stats.select("first_year").mask()
+        cells = []
+        for row in range(WATER_GRID):
+            for col in range(WATER_GRID):
+                cells.append(
+                    ee.Geometry.Rectangle(
+                        [
+                            west + col * width,
+                            south + row * height,
+                            west + (col + 1) * width,
+                            south + (row + 1) * height,
+                        ]
+                    ).intersection(aoi, maxError=1)
+                )
+        return cells
+
+    def patches_for_cell(self, cell: Any) -> Any:
+        """The ee.FeatureCollection of water patches inside one grid cell, area-tagged."""
+        import ee
+
+        stats = self.water_stats_image(cell)
+        # `.mask()` reads back the mask *channel* as data, which comes back floating-point --
+        # `connectedPixelCount` refuses that outright ("Segment size calculation on floating point
+        # bands is not supported"), found by actually running this against Earth Engine. A boolean
+        # comparison keeps the source pixels' mask (still masked outside ever-water) but its own
+        # result is a real integer type, and `selfMask` then collapses it to one uniform class so
+        # vectorizing groups by connectivity alone, not by the varying first_year value underneath.
+        ever_water = stats.select("first_year").gt(0).selfMask()
 
         # Vectorized from the boolean mask alone, exactly like forest's loss/extent passes — the
         # geometry a component gets does not depend on what its pixels' first/last year happen to
         # be, only on which pixels were ever water and how they connect.
         component_size = ever_water.connectedPixelCount(maxSize=16, eightConnected=False)
-        kept = ever_water.updateMask(component_size.gte(MIN_PATCH_PIXELS)).selfMask()
+        kept = ever_water.updateMask(component_size.gte(MIN_PATCH_PIXELS))
 
+        # `scale` rather than the reduced image's own `.projection()`: reducing over an
+        # ImageCollection with `.reduce()` does not carry forward a concrete grid the way a single
+        # loaded asset band's native projection does, so `crs=<that projection>` alone reaches
+        # Earth Engine with no resolvable scale attached ("You must specify a scale or crsTransform
+        # when specifying a crs"), found by actually running this. Both sources are natively
+        # `config.NATIVE_SCALE_M`, so stating it directly sidesteps relying on that propagation.
         regions = kept.reduceToVectors(
-            geometry=aoi,
-            crs=stats.select("first_year").projection(),
+            geometry=cell,
+            scale=config.NATIVE_SCALE_M,
             geometryType="polygon",
             eightConnected=False,
             maxPixels=int(1e10),
@@ -289,29 +340,50 @@ class WaterDomain(Domain):
         stats_by_region = stats.reduceRegions(
             collection=regions,
             reducer=ee.Reducer.mean(),
-            crs=stats.select("first_year").projection(),
+            scale=config.NATIVE_SCALE_M,
         )
 
         def tag_area(feature: Any) -> Any:
             area_ha = feature.geometry().area(maxError=1).divide(config.M2_PER_HA)
             return feature.set("area_ha", area_ha)
 
-        raw = extract.download_features(stats_by_region.map(tag_area), description="water extent")
+        return stats_by_region.map(tag_area)
 
+    def extract(self, aoi: Any) -> dict[str, Any]:
+        from trace_pipeline import extract
+
+        first, last, asset = self._resolve()
         features: list[dict[str, Any]] = []
-        for item in raw:
-            props = item["properties"]
-            features.append(
-                build_feature(
-                    geometry=item["geometry"],
-                    first_year=round(props["first_year"]),
-                    last_year=round(props["last_year"]),
-                    range_first=first,
-                    range_last=last,
-                    area_ha=props["area_ha"],
-                    gsw_asset=asset,
-                    transition_code=round(props["transition"]) if "transition" in props else None,
+
+        for index, cell in enumerate(self.grid_cells(aoi), start=1):
+            collection = self.patches_for_cell(cell)
+            raw = extract.download_features(
+                collection, description=f"water cell {index}/{WATER_GRID**2}"
+            )
+
+            for item in raw:
+                props = item["properties"]
+                features.append(
+                    build_feature(
+                        geometry=item["geometry"],
+                        first_year=round(props["first_year"]),
+                        last_year=round(props["last_year"]),
+                        range_first=first,
+                        range_last=last,
+                        area_ha=props["area_ha"],
+                        gsw_asset=asset,
+                        transition_code=(
+                            round(props["transition"])
+                            if props.get("transition") is not None
+                            else None
+                        ),
+                    )
                 )
+
+            print(
+                f"  cell {index}/{WATER_GRID**2}: {len(raw):,} patches "
+                f"(running total {len(features):,})",
+                flush=True,
             )
 
         print(f"  {len(features):,} water patches, GSW {asset}", flush=True)
