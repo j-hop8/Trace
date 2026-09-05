@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type maplibregl from 'maplibre-gl';
 
 import {
@@ -12,7 +12,24 @@ import {
   sourceId,
 } from '@/domains/layerSpec';
 import { useTraceStore } from '@/store/useTraceStore';
-import type { TraceFeatureProperties } from '@/types/feature';
+import type { DomainId, TraceFeatureProperties } from '@/types/feature';
+
+/**
+ * How long the basemap gets to paint before the domain layers are allowed on.
+ *
+ * At the opening view the basemap is 12 tiles and 498 KB; forest is 11 tiles and 7.5 MB. Adding
+ * both at once let the larger one bury the smaller, and since the page background and the style's
+ * own background layer are both near-black by design, the result was several seconds of nothing to
+ * look at. On any healthy connection the basemap is drawn long before this expires and the delay is
+ * imperceptible; on a slow one, holding the data back for two seconds is the point rather than a
+ * compromise.
+ *
+ * It is a *grace period*, not a precondition: whatever happens, the layers go on. Rendering is
+ * driven by requestAnimationFrame, which a background tab pauses, so a tab that never comes to the
+ * front would otherwise never paint, never report idle, and never get its layers at all — the
+ * failure `MapCanvas` documents at `markReady` and deliberately avoids.
+ */
+const FIRST_PAINT_GRACE_MS = 2000;
 
 /**
  * How long to wait when no reload ever starts.
@@ -62,6 +79,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   const viewModeFor = useTraceStore((s) => s.viewModeFor);
   const year = useTraceStore((s) => s.year);
   const setRenderedYear = useTraceStore((s) => s.setRenderedYear);
+  const setLoadingDomains = useTraceStore((s) => s.setLoadingDomains);
   const select = useTraceStore((s) => s.select);
 
   /** Latest year asked for. Overwritten freely; only ever read by `pump`. */
@@ -93,6 +111,53 @@ export function useDomainLayers(map: maplibregl.Map | null) {
    * `pump` directly would pin whichever set of active domains was current when the commit started.
    */
   const pumpAgain = useRef<() => void>(() => {});
+  /**
+   * Domains seen fully loaded at least once since their source was (last) added.
+   *
+   * A ref, not effect-local state: the loading-report effect below re-runs on every domain toggle,
+   * and re-deriving this from scratch each time would forget an unrelated, still-loaded domain the
+   * instant any other domain is switched on or off, showing its badge again on a coincidence of
+   * timing rather than anything about that domain. Cleared per-domain when its source is actually
+   * torn down, in the effect below that owns that lifecycle.
+   */
+  const everLoaded = useRef(new Set<DomainId>());
+
+  /** Whether the basemap has had its turn — see `FIRST_PAINT_GRACE_MS`. */
+  const [basemapPainted, setBasemapPainted] = useState(false);
+
+  useEffect(() => {
+    if (!map) return;
+    // Reset for this map instance: `basemapPainted` otherwise carries a stale `true` forward if
+    // the map is ever rebuilt, letting domain layers straight onto a fresh, unpainted map.
+    setBasemapPainted(false);
+
+    let timer = 0;
+
+    const done = () => {
+      window.clearTimeout(timer);
+      map.off('idle', done);
+      setBasemapPainted(true);
+    };
+
+    // Nothing but the basemap is on the map yet, so `idle` here means exactly what it needs to:
+    // the basemap has finished loading and has been drawn. `map.once` rather than a hand-rolled
+    // guard: it is already a self-removing one-time listener, so calling `done` twice — once from
+    // `idle`, once from the timeout racing it — is harmless without one.
+    map.once('idle', done);
+    // The map may already be idle by the time this effect runs: `map` is only handed down after
+    // MapCanvas's own `styledata`/`load` handler fires, a render cycle before this subscribes, and
+    // a fast or cached basemap can finish inside that gap. Asking directly closes the race instead
+    // of paying the full grace period on the connections that need it least. `loaded()` alone isn't
+    // `idle` — it skips the camera-motion check `idle` itself gates on — so a fitBounds still easing
+    // in would otherwise pass this check before its own tiles have settled into their final view.
+    if (map.loaded() && !map.isMoving()) done();
+    else timer = window.setTimeout(done, FIRST_PAINT_GRACE_MS);
+
+    return () => {
+      map.off('idle', done);
+      window.clearTimeout(timer);
+    };
+  }, [map]);
 
   // The hatch is a runtime-drawn image, registered before any layer references it. A fill-pattern
   // naming a missing image renders nothing at all, silently dropping the loss layer.
@@ -102,9 +167,11 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     map.addImage(HATCH_IMAGE, createHatchImage(), { pixelRatio: 2 });
   }, [map]);
 
-  // Add and remove whole domains.
+  // Add and remove whole domains, once the basemap has had its turn.
   useEffect(() => {
     if (!map || !manifest) return;
+    // Only ever gates the first add: once true this stays true, so later toggles are immediate.
+    if (!basemapPainted) return;
 
     for (const entry of manifest.domains) {
       const shouldBeVisible = activeDomains.has(entry.id);
@@ -129,6 +196,10 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         // ids — the still-active domains' cached opacities are still accurate and clearing them too
         // would force every one of their layers to be reapplied on the next pump for nothing.
         for (const id of layerIdsFor(entry)) applied.current.delete(id);
+        // The source that made this true is gone; a domain switched back on gets a fresh load
+        // window rather than skipping straight past it on the strength of a source that no longer
+        // exists.
+        everLoaded.current.delete(entry.id);
       }
     }
     // Adding or removing a source starts loads of its own, and an in-flight year commit cannot tell
@@ -139,7 +210,57 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     // re-adding sources on every tick or toggle would refetch tiles and defeat the whole point.
     // Both are applied to live layers by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, manifest, activeDomains]);
+  }, [map, manifest, activeDomains, basemapPainted]);
+
+  // Report which switched-on domains have nothing on screen yet.
+  //
+  // Two windows produce one, and they look identical to the reader: the grace period above, where
+  // the source does not exist at all, and the tile load that follows it. Both show a lit toggle
+  // over an empty map, which is exactly what a layer with no data for the year looks like.
+  useEffect(() => {
+    if (!map || !manifest) return;
+
+    // Bounds the badge to the two windows the comment above names: without checking `everLoaded`,
+    // a later `sourcedata` event from panning into fresh tiles for an already-loaded domain would
+    // flip the badge back on for data the reader has already been looking at.
+    const domainSourceIds = new Set(manifest.domains.map((entry) => sourceId(entry.id)));
+
+    const update = (e?: maplibregl.MapSourceDataEvent) => {
+      // Most `sourcedata` events name the one source that changed; ignore it outright if that
+      // source belongs to no domain, rather than re-checking every active domain for nothing.
+      if (e?.sourceId && !domainSourceIds.has(e.sourceId)) return;
+
+      const loading = new Set<DomainId>();
+
+      for (const entry of manifest.domains) {
+        if (!activeDomains.has(entry.id)) continue;
+        if (everLoaded.current.has(entry.id)) continue;
+
+        const id = sourceId(entry.id);
+        // `getSource` first: `isSourceLoaded` raises an error event for a source the map does not
+        // have, which during the grace period is every one of them.
+        if (!map.getSource(id) || !map.isSourceLoaded(id)) {
+          loading.add(entry.id);
+        } else {
+          everLoaded.current.add(entry.id);
+        }
+      }
+
+      // Written only when the membership actually changed. `sourcedata` fires per tile, and a fresh
+      // Set each time is a new reference as far as zustand is concerned — the toggles would
+      // re-render continuously for as long as tiles kept arriving.
+      const current = useTraceStore.getState().loadingDomains;
+      const unchanged = loading.size === current.size && [...loading].every((d) => current.has(d));
+      if (!unchanged) setLoadingDomains(loading);
+    };
+
+    map.on('sourcedata', update);
+    update();
+
+    return () => {
+      map.off('sourcedata', update);
+    };
+  }, [map, manifest, activeDomains, basemapPainted, setLoadingDomains]);
 
   // Apply the view mode. Both views' layers already exist, so this is a visibility switch — no
   // source churn, no refetch, and the toggle is instant.
