@@ -8,7 +8,7 @@ full design and build proposal.
 
 | | Pipeline (`pipeline/`) | Web (`web/`) |
 |---|---|---|
-| Test | `pytest` | — |
+| Test | `pytest` | `npm test` |
 | Lint | `ruff check .` | — |
 | Format | `ruff format .` | `prettier --write .` |
 | Typecheck | — | `npm run typecheck` |
@@ -27,9 +27,22 @@ invariants keep it modular; breaking any of them is what turns this back into a 
 components, no per-domain branches. Adding a domain is a pipeline module plus a manifest entry.
 The manifest also drives the attribution line, per-layer caveats, and per-layer slider ranges.
 
-**2. Time is a feature attribute, not a layer.** Each feature carries `valid_from` / `valid_to`.
-The time slider is a MapLibre filter expression (`["<=", ["get", "valid_from"], year]`) over one
-tileset per domain — never 41 stacked yearly layers. This is why there is no tile server.
+**2. Time is a feature attribute, not a tileset.** Each feature carries `valid_from` / `valid_to`,
+and one tileset per domain covers every year — never a tileset per year. This is why there is no
+tile server.
+
+Inside that tileset the slider animates **opacity, not filters**. Layers are split into one *cohort
+per year* (`cohortFilter` in [layerSpec.ts](web/src/domains/layerSpec.ts)), each carrying a filter
+fixed at build time, and a year is shown by setting a constant opacity on them. This replaced a
+single layer with a live `["<=", ["get", "valid_from"], year]` filter, because `setFilter` makes
+MapLibre re-parse every loaded tile in the worker: each step re-tessellated everything from the
+start of the range to the current year — 2,656 features at 2001 against 91,088 at 2025 — so
+playback started fast and slowed to a crawl. A constant paint value is the only style change
+MapLibre applies without touching tile data, and cohorts are what turn the year into one.
+
+Cohorts assume features are **open-ended** (`valid_to: null`), which is what the pipeline emits: a
+cohort switches on at its year and never switches off. A domain that ends a feature's validity
+needs this revisited, not merely re-run.
 
 **3. Every feature carries the full B4 schema.** `domain`, `subtype`, `valid_from`, `valid_to`,
 `change_type`, `metric`, `source`, `method`, `confidence` — defined once in
@@ -64,7 +77,7 @@ This repo follows the global Claude+Codex standard (~/.claude/CLAUDE.md, ~/.code
 - Tickets: `.agents/tickets/T-xxx-<slug>.md` (template: `_template.md`). Done → `.agents/tickets/done/`.
 - Branches: `claude/T-xxx-slug` | `codex/T-xxx-slug`. Commits: `claude:` / `codex:` prefix.
 - All merges to main via squash PR. Codex worktrees live in `.worktrees/` (gitignored).
-- Test: `cd pipeline && pytest` · Lint: `ruff check .` · Format: `ruff format .` / `prettier --write .`
+- Test: `cd pipeline && pytest` / `cd web && npm test` · Lint: `ruff check .` · Format: `ruff format .` / `prettier --write .`
 
 ## Gotchas
 

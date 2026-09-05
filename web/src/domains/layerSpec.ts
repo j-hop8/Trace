@@ -52,38 +52,55 @@ function styleExpression(entry: DomainManifestEntry, channel: 'color' | 'stroke'
 }
 
 /**
- * The time filter.
+ * The years a domain's layers are split across — one *cohort* per year of its coverage.
  *
- * `valid_from <= year` is the whole animation: one tileset per domain, filtered on the GPU, so
- * scrubbing never reloads a tile.
- *
- * The `valid_to` half has to tolerate the key being **absent**. Tiling drops null attributes, so a
- * feature whose state has not ended carries no `valid_to` at all — testing it directly would hide
- * every open-ended feature, which for forest loss is all of them.
+ * Time is still a feature attribute: each cohort selects on `valid_from`, and the manifest's
+ * range is what decides how many there are. What changed is that the selection is **fixed** at
+ * build time rather than rewritten as the slider moves, which is what makes the animation free.
+ * See `cohortFilter`.
  */
-export function timeFilter(year: number): FilterSpecification {
-  return [
-    'all',
-    ['<=', ['get', 'valid_from'], year],
-    ['any', ['!', ['has', 'valid_to']], ['>=', ['get', 'valid_to'], year]],
-  ] as FilterSpecification;
+export function cohortYears(entry: DomainManifestEntry): number[] {
+  const years: number[] = [];
+  for (let year = entry.temporal.start; year <= entry.temporal.end; year += 1) years.push(year);
+  return years;
+}
+
+/**
+ * One cohort's share of a domain: the features that begin in that year, and nothing else.
+ *
+ * The first cohort takes everything from that year *back*, so a baseline laid down before the
+ * slider's first year — forest's 2000 canopy under a range starting at 2001 — lands in it rather
+ * than in no cohort at all.
+ *
+ * Every clause here is constant. That is the entire point: a filter that never changes is parsed
+ * into its bucket once, and the year is then animated by opacity alone, which MapLibre applies
+ * without re-parsing anything. Rewriting one live filter instead made every step re-tessellate
+ * every feature from the start of the range to the current year — 2,656 of them at 2001 against
+ * 91,088 at 2025, which is exactly why playback used to begin quickly and grind to a crawl.
+ *
+ * **Precondition: features are open-ended.** A cohort is switched on for every year at or after
+ * its own and never switched off again, so a feature that *stops* being true — a non-null
+ * `valid_to` — would keep drawing past its end. Every feature the pipeline emits today carries
+ * `valid_to: null`, so this holds; a domain that starts emitting one needs this revisited rather
+ * than merely re-run.
+ */
+function cohortFilter(
+  entry: DomainManifestEntry,
+  cohort: number,
+  test: FilterSpecification,
+): FilterSpecification {
+  const begins: FilterSpecification =
+    cohort === entry.temporal.start
+      ? (['<=', ['get', 'valid_from'], cohort] as FilterSpecification)
+      : (['==', ['get', 'valid_from'], cohort] as FilterSpecification);
+
+  return ['all', begins, test] as FilterSpecification;
 }
 
 /** `change_type` tests, named because they are the difference between the two views. */
 const IS_EXTENT: FilterSpecification = ['==', ['get', 'change_type'], 'extent'];
 const IS_NOT_EXTENT: FilterSpecification = ['!=', ['get', 'change_type'], 'extent'];
 const IS_LOSS: FilterSpecification = ['==', ['get', 'change_type'], 'loss'];
-
-/**
- * Combine the year filter with a `change_type` test.
- *
- * `timeFilter` is already an `all`, so its clauses are spread rather than nested — otherwise every
- * layer would carry a pointless `["all", ["all", …], …]`.
- */
-function withTime(year: number, test: FilterSpecification): FilterSpecification {
-  const [, ...timeClauses] = timeFilter(year) as unknown as FilterSpecification[];
-  return ['all', ...timeClauses, test] as FilterSpecification;
-}
 
 /**
  * The width ramp that keeps a sub-pixel patch visible.
@@ -235,33 +252,121 @@ const ROLES = [
   },
 ] as const;
 
-const roleLayerId = (domainId: string, key: string) => `trace-${domainId}-${key}`;
+const cohortLayerId = (domainId: string, key: string, cohort: number) =>
+  `trace-${domainId}-${key}-${cohort}`;
+
+/** What a role's `paint(entry)` returns: enough to derive its opacity channel and draw it. */
+type BuiltRole = { type: 'fill' | 'line'; paint: Record<string, unknown> };
 
 /**
- * All layer ids a domain owns, in draw order. Used for teardown and hit-testing.
+ * The opacity channel a role is animated through, and the value it holds when shown.
+ *
+ * Read back off the role's own paint rather than listed separately, so a role that changes how
+ * solid it draws cannot end up fading to a different value than it painted with. Roles must
+ * therefore declare a plain number: an expression here would be data-driven, and a data-driven
+ * paint property is exactly the thing that forces the reload this design exists to avoid.
+ */
+export function opacityChannel(built: BuiltRole): {
+  key: string;
+  shown: number;
+} {
+  const key = built.type === 'fill' ? 'fill-opacity' : 'line-opacity';
+  const shown = built.paint[key];
+
+  if (typeof shown !== 'number') {
+    throw new Error(`Layer role paints ${key} with an expression; cohorts need a constant.`);
+  }
+
+  return { key, shown };
+}
+
+/**
+ * `role.paint(entry)`, cached per domain/role.
+ *
+ * It rebuilds the whole style-expression object — `match`/`step` arrays, several calls into
+ * `styleFor` — every time it runs, but is only ever asked for the same handful of (entry, role)
+ * pairs, and their output never changes for the life of a manifest. `opacityUpdatesFor` calls this
+ * once per role on every single year commit, so leaving it uncached meant reconstructing every
+ * role's full paint object on every tick of playback just to read back one constant.
+ *
+ * Keyed on the `entry` object itself, not `entry.id`: a manifest that is ever replaced hands every
+ * domain a fresh entry object, so the old one's cache entries simply become unreachable rather than
+ * shadowing a same-id domain that has since changed hue or anything else `role.paint` reads.
+ */
+const builtCache = new WeakMap<DomainManifestEntry, Map<string, BuiltRole>>();
+
+function builtFor(entry: DomainManifestEntry, role: (typeof ROLES)[number]): BuiltRole {
+  let perEntry = builtCache.get(entry);
+  if (!perEntry) {
+    perEntry = new Map();
+    builtCache.set(entry, perEntry);
+  }
+  let built = perEntry.get(role.key);
+  if (!built) {
+    built = role.paint(entry);
+    perEntry.set(role.key, built);
+  }
+  return built;
+}
+
+/**
+ * All layer ids a domain owns, in draw order. Used for teardown.
  *
  * Both views' layers are built once and switched with `visibility` rather than added and removed,
  * so that flipping the toggle never refetches a tile.
  */
-export function layerIdsFor(domainId: string): string[] {
-  return ROLES.map((role) => roleLayerId(domainId, role.key));
+export function layerIdsFor(entry: DomainManifestEntry): string[] {
+  return ROLES.flatMap((role) =>
+    cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
+  );
 }
 
 /** Which view each layer belongs to. Drives the visibility switch in `useDomainLayers`. */
-export function layerIdsForMode(domainId: string, mode: ViewMode): string[] {
-  return ROLES.filter((role) => role.mode === mode).map((role) => roleLayerId(domainId, role.key));
+export function layerIdsForMode(entry: DomainManifestEntry, mode: ViewMode): string[] {
+  return ROLES.filter((role) => role.mode === mode).flatMap((role) =>
+    cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
+  );
 }
 
 /**
- * Every layer's filter for a given year, keyed by layer id.
+ * The layers actually showing something at a given year — the ones a click may land on.
  *
- * The single source for both jobs that need them: building the layers, and re-filtering live ones
- * when the slider moves. They used to be written out in both places, in different files, which
- * meant the year effect silently dropped the `change_type` half of each filter — the layers were
- * correct until the first scrub, and then quietly wrong.
+ * Hit-testing has to ask for these by name rather than for everything the domain owns. A cohort
+ * from a later year is still *there*, drawn at zero opacity, and `queryRenderedFeatures` reads
+ * geometry rather than paint: querying the lot would let the reader click a patch of loss that
+ * has not happened yet and open a readout describing it.
  */
-export function filtersFor(domainId: string, year: number): [string, FilterSpecification][] {
-  return ROLES.map((role) => [roleLayerId(domainId, role.key), withTime(year, role.test)]);
+export function layerIdsForYear(entry: DomainManifestEntry, year: number): string[] {
+  return ROLES.flatMap((role) =>
+    cohortYears(entry)
+      .filter((cohort) => cohort <= year)
+      .map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
+  );
+}
+
+/**
+ * Every cohort's opacity for a given year, keyed by layer id and paint property.
+ *
+ * This is the animation. Each entry is a *constant* paint value, which MapLibre applies without
+ * touching tile data at all — no filter change, no source reload, no re-tessellation. Cohorts up
+ * to the year draw at their role's own opacity; the rest sit at zero.
+ */
+export function opacityUpdatesFor(
+  entry: DomainManifestEntry,
+  year: number,
+): [string, string, number][] {
+  return ROLES.flatMap((role) => {
+    const { key, shown } = opacityChannel(builtFor(entry, role));
+
+    return cohortYears(entry).map(
+      (cohort) =>
+        [cohortLayerId(entry.id, role.key, cohort), key, cohort <= year ? shown : 0] as [
+          string,
+          string,
+          number,
+        ],
+    );
+  });
 }
 
 export interface DomainLayers {
@@ -273,19 +378,35 @@ export interface DomainLayers {
 export function layersFor(entry: DomainManifestEntry, year: number, mode: ViewMode): DomainLayers {
   const source = sourceId(entry.id);
 
-  // Built by walking the same table that produces the ids, the filters and the visibility sets,
+  // Built by walking the same table that produces the ids, the opacities and the visibility sets,
   // in the same order. There is no second list to fall out of step with.
-  const layers = ROLES.map((role) => {
-    const { type, paint } = role.paint(entry);
-    return {
-      id: roleLayerId(entry.id, role.key),
-      type,
-      source,
-      'source-layer': entry.tiles.sourceLayer,
-      filter: withTime(year, role.test),
-      layout: { visibility: role.mode === mode ? 'visible' : 'none' },
-      paint,
-    } as FillLayerSpecification | LineLayerSpecification;
+  //
+  // Roles are the outer loop and cohorts the inner one, which keeps `ROLES` order — and with it
+  // the rule that cleared patches are painted over the extent they cut holes in. Interleaving the
+  // two would scatter each role's cohorts through the draw order and lose that.
+  const layers = ROLES.flatMap((role) => {
+    const built = builtFor(entry, role);
+    const { key, shown } = opacityChannel(built);
+
+    return cohortYears(entry).map(
+      (cohort) =>
+        ({
+          id: cohortLayerId(entry.id, role.key, cohort),
+          type: built.type,
+          source,
+          'source-layer': entry.tiles.sourceLayer,
+          filter: cohortFilter(entry, cohort, role.test),
+          layout: { visibility: role.mode === mode ? 'visible' : 'none' },
+          paint: {
+            ...built.paint,
+            [key]: cohort <= year ? shown : 0,
+            // A cohort appears the instant its year arrives. The default 300ms fade would still be
+            // running two years later at playback speed, leaving the map showing a half-drawn year
+            // while the readout named it outright.
+            [`${key}-transition`]: { duration: 0, delay: 0 },
+          },
+        }) as unknown as FillLayerSpecification | LineLayerSpecification,
+    );
   });
 
   return {
