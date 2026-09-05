@@ -111,6 +111,16 @@ export function useDomainLayers(map: maplibregl.Map | null) {
    * `pump` directly would pin whichever set of active domains was current when the commit started.
    */
   const pumpAgain = useRef<() => void>(() => {});
+  /**
+   * Domains seen fully loaded at least once since their source was (last) added.
+   *
+   * A ref, not effect-local state: the loading-report effect below re-runs on every domain toggle,
+   * and re-deriving this from scratch each time would forget an unrelated, still-loaded domain the
+   * instant any other domain is switched on or off, showing its badge again on a coincidence of
+   * timing rather than anything about that domain. Cleared per-domain when its source is actually
+   * torn down, in the effect below that owns that lifecycle.
+   */
+  const everLoaded = useRef(new Set<DomainId>());
 
   /** Whether the basemap has had its turn — see `FIRST_PAINT_GRACE_MS`. */
   const [basemapPainted, setBasemapPainted] = useState(false);
@@ -137,8 +147,10 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     // The map may already be idle by the time this effect runs: `map` is only handed down after
     // MapCanvas's own `styledata`/`load` handler fires, a render cycle before this subscribes, and
     // a fast or cached basemap can finish inside that gap. Asking directly closes the race instead
-    // of paying the full grace period on the connections that need it least.
-    if (map.loaded()) done();
+    // of paying the full grace period on the connections that need it least. `loaded()` alone isn't
+    // `idle` — it skips the camera-motion check `idle` itself gates on — so a fitBounds still easing
+    // in would otherwise pass this check before its own tiles have settled into their final view.
+    if (map.loaded() && !map.isMoving()) done();
     else timer = window.setTimeout(done, FIRST_PAINT_GRACE_MS);
 
     return () => {
@@ -184,6 +196,10 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         // ids — the still-active domains' cached opacities are still accurate and clearing them too
         // would force every one of their layers to be reapplied on the next pump for nothing.
         for (const id of layerIdsFor(entry)) applied.current.delete(id);
+        // The source that made this true is gone; a domain switched back on gets a fresh load
+        // window rather than skipping straight past it on the strength of a source that no longer
+        // exists.
+        everLoaded.current.delete(entry.id);
       }
     }
     // Adding or removing a source starts loads of its own, and an in-flight year commit cannot tell
@@ -204,13 +220,10 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   useEffect(() => {
     if (!map || !manifest) return;
 
-    // Domains that have been seen fully loaded once. Bounds the badge to those same two windows:
-    // without this, a later `sourcedata` event from panning into fresh tiles for an already-loaded
-    // domain would flip the badge back on for data the reader has already been looking at.
-    const everLoaded = new Set<DomainId>();
-    const domainSourceIds = new Map(
-      manifest.domains.map((entry) => [sourceId(entry.id), entry.id]),
-    );
+    // Bounds the badge to the two windows the comment above names: without checking `everLoaded`,
+    // a later `sourcedata` event from panning into fresh tiles for an already-loaded domain would
+    // flip the badge back on for data the reader has already been looking at.
+    const domainSourceIds = new Set(manifest.domains.map((entry) => sourceId(entry.id)));
 
     const update = (e?: maplibregl.MapSourceDataEvent) => {
       // Most `sourcedata` events name the one source that changed; ignore it outright if that
@@ -221,7 +234,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
 
       for (const entry of manifest.domains) {
         if (!activeDomains.has(entry.id)) continue;
-        if (everLoaded.has(entry.id)) continue;
+        if (everLoaded.current.has(entry.id)) continue;
 
         const id = sourceId(entry.id);
         // `getSource` first: `isSourceLoaded` raises an error event for a source the map does not
@@ -229,7 +242,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         if (!map.getSource(id) || !map.isSourceLoaded(id)) {
           loading.add(entry.id);
         } else {
-          everLoaded.add(entry.id);
+          everLoaded.current.add(entry.id);
         }
       }
 
