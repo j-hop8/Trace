@@ -35,11 +35,11 @@ so `npm install` currently prints an EBADENGINE warning on every run.
 4. Bump `node-version` in `.github/workflows/ci.yml` to match `.nvmrc`.
 
 ## Acceptance criteria
-- [ ] `npm install` completes with no EBADENGINE warning.
-- [ ] `npm audit` reports zero moderate-or-higher vulnerabilities.
-- [ ] `npm run typecheck`, `npm run build`, and `npm run dev` all pass on the new Node.
-- [ ] CI's Node version and `.nvmrc` agree — a drift here means CI stops testing what runs locally.
-- [ ] The other three side projects still build, or the version is scoped per-project.
+- [x] `npm install` completes with no EBADENGINE warning.
+- [x] `npm audit` reports zero moderate-or-higher vulnerabilities.
+- [x] `npm run typecheck`, `npm run build`, and `npm run dev` all pass on the new Node.
+- [x] CI's Node version and `.nvmrc` agree — a drift here means CI stops testing what runs locally.
+- [x] The other three side projects still build, or the version is scoped per-project.
 
 **Verify:** `cd web && npm ci && npm audit && npm run build`
-**Owner:** codex
+**Owner:** claude

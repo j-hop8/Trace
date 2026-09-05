@@ -16,6 +16,8 @@ full design and build proposal.
 | Dev | — | `npm run dev` |
 
 Pipeline runs on Python 3.12 in `pipeline/.venv`. Activate with `source pipeline/.venv/bin/activate`.
+Web runs on the Node version pinned in `web/.nvmrc` (currently 22) — CI reads the same file, so the
+two can't drift apart.
 
 ## Architecture — three rules that matter
 
