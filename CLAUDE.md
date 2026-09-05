@@ -16,6 +16,10 @@ full design and build proposal.
 | Dev | — | `npm run dev` |
 
 Pipeline runs on Python 3.12 in `pipeline/.venv`. Activate with `source pipeline/.venv/bin/activate`.
+Web runs on the Node version pinned in `web/.nvmrc`. CI reads the same file, so the two can't drift
+apart; `web/.npmrc` (`engine-strict=true`) makes a mismatch a hard `npm install` failure everywhere
+else. Locally, install [fnm](https://github.com/Schniz/fnm) and run `fnm use` after `cd web` — no
+shell hook is configured to trigger it on `cd` automatically, so this is a manual step per shell.
 
 ## Architecture — three rules that matter
 
