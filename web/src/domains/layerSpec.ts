@@ -263,7 +263,7 @@ const cohortLayerId = (domainId: string, key: string, cohort: number) =>
  * therefore declare a plain number: an expression here would be data-driven, and a data-driven
  * paint property is exactly the thing that forces the reload this design exists to avoid.
  */
-function opacityChannel(built: { type: 'fill' | 'line'; paint: Record<string, unknown> }): {
+export function opacityChannel(built: { type: 'fill' | 'line'; paint: Record<string, unknown> }): {
   key: string;
   shown: number;
 } {
@@ -275,6 +275,30 @@ function opacityChannel(built: { type: 'fill' | 'line'; paint: Record<string, un
   }
 
   return { key, shown };
+}
+
+/**
+ * `role.paint(entry)`, cached per domain/role.
+ *
+ * It rebuilds the whole style-expression object — `match`/`step` arrays, several calls into
+ * `styleFor` — every time it runs, but is only ever asked for the same handful of (entry, role)
+ * pairs, and their output never changes for the life of a manifest. `opacityUpdatesFor` calls this
+ * once per role on every single year commit, so leaving it uncached meant reconstructing every
+ * role's full paint object on every tick of playback just to read back one constant.
+ */
+const builtCache = new Map<string, { type: 'fill' | 'line'; paint: Record<string, unknown> }>();
+
+function builtFor(
+  entry: DomainManifestEntry,
+  role: (typeof ROLES)[number],
+): { type: 'fill' | 'line'; paint: Record<string, unknown> } {
+  const cacheKey = `${entry.id}:${role.key}`;
+  let built = builtCache.get(cacheKey);
+  if (!built) {
+    built = role.paint(entry);
+    builtCache.set(cacheKey, built);
+  }
+  return built;
 }
 
 /**
@@ -324,7 +348,7 @@ export function opacityUpdatesFor(
   year: number,
 ): [string, string, number][] {
   return ROLES.flatMap((role) => {
-    const { key, shown } = opacityChannel(role.paint(entry));
+    const { key, shown } = opacityChannel(builtFor(entry, role));
 
     return cohortYears(entry).map(
       (cohort) =>
@@ -353,7 +377,7 @@ export function layersFor(entry: DomainManifestEntry, year: number, mode: ViewMo
   // the rule that cleared patches are painted over the extent they cut holes in. Interleaving the
   // two would scatter each role's cohorts through the draw order and lose that.
   const layers = ROLES.flatMap((role) => {
-    const built = role.paint(entry);
+    const built = builtFor(entry, role);
     const { key, shown } = opacityChannel(built);
 
     return cohortYears(entry).map(

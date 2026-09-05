@@ -21,7 +21,7 @@ import { PbfReader } from 'pbf';
 import { PMTiles } from 'pmtiles';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { layersFor } from '@/domains/layerSpec';
+import { layersFor, opacityChannel } from '@/domains/layerSpec';
 import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
 
 const DATA = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../data');
@@ -148,9 +148,7 @@ describe.skipIf(!runnable)('cohorts against the built tileset', () => {
         const shown = new Set<number>();
         for (const layer of mine) {
           const paint = layer.paint as Record<string, unknown>;
-          const opacity = (
-            layer.type === 'fill' ? paint['fill-opacity'] : paint['line-opacity']
-          ) as number;
+          const { shown: opacity } = opacityChannel({ type: layer.type, paint });
           if (opacity === 0) continue;
           for (const i of selects(layer.filter, features, layer.id)) shown.add(i);
         }

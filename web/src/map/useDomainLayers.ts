@@ -125,8 +125,10 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         }
         map.removeSource(sourceId(entry.id));
         // The layers those opacities described are gone; a stale cache would skip re-applying them
-        // to the fresh ones if the domain came back at the same year.
-        applied.current.clear();
+        // to the fresh ones if the domain came back at the same year. Scoped to this domain's own
+        // ids — the still-active domains' cached opacities are still accurate and clearing them too
+        // would force every one of their layers to be reapplied on the next pump for nothing.
+        for (const id of layerIdsFor(entry)) applied.current.delete(id);
       }
     }
     // Adding or removing a source starts loads of its own, and an in-flight year commit cannot tell
@@ -191,8 +193,6 @@ export function useDomainLayers(map: maplibregl.Map | null) {
 
     let settled = false;
     let timer = 0;
-    /** Consecutive render passes seen with everything loaded — see `onRender`. */
-    let quietRenders = 0;
     /**
      * Whether the reload has been seen actually running.
      *
@@ -236,7 +236,6 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     function onSourceData() {
       if (!allLoaded()) {
         markReloading();
-        quietRenders = 0;
         return;
       }
       if (reloading) onSettled();
@@ -245,7 +244,6 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     function onRender() {
       if (!allLoaded()) {
         markReloading();
-        quietRenders = 0;
         return;
       }
       if (reloading) {
@@ -253,12 +251,14 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         return;
       }
       // A render pass runs `Style.update` before it draws, so by the time this fires, a reload this
-      // commit triggered has already marked its tiles unloaded. Two clean passes in a row therefore
-      // mean the new filters changed nothing to reload — which is the case on first paint, where
-      // the layers were created carrying this year already. Two rather than one because a render
-      // already in flight when the filters were applied could otherwise report the state before
-      // them. Settling here keeps a no-op commit from holding the next one behind a whole timeout.
-      if (++quietRenders >= 2) onSettled();
+      // commit triggered has already marked its tiles unloaded — if none did, this render is already
+      // painting the opacities just set. One pass is enough: the listeners above were attached
+      // synchronously, in the same tick as the paint calls, so JS's run-to-completion guarantees the
+      // very next render event cannot be one already in flight from before them — there is no older
+      // frame left to mistake this for. (Two passes were needed here when a year change was still a
+      // `setFilter`, whose reload runs in a worker on its own clock and could finish after a render
+      // had already fired; a paint value is applied synchronously and has no such gap.)
+      onSettled();
     }
 
     // `sourcedata` carries the tile state changes; `render` covers the frames between them, so a

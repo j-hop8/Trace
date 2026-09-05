@@ -133,13 +133,14 @@ export const useTraceStore = create<TraceState>((set, get) => ({
         activeDomains: next,
         selected: keepSelection ? state.selected : null,
         // Toggling a layer changes the slider's bounds, and an unclamped year then disagrees with
-        // both the thumb and the map: the slider clamps only what it *displays*, so a year of
-        // 1990 left over from a 1984-start domain would show "1990" beside a thumb parked at 2001
-        // while the map filtered at 1990 and drew nothing. Three answers to one question.
+        // the thumb: the slider clamps only what it *displays*, so a year of 1990 left over from a
+        // 1984-start domain would show a thumb parked at 2001 while still asking the map for 1990.
         year: clampYear(state.year, state.manifest, next),
-        // Clamped alongside `year` for the same reason: the readout reads from this, and an
-        // unclamped value would print a year outside the axis the thumb is now sitting on.
-        renderedYear: clampYear(state.renderedYear, state.manifest, next),
+        // `renderedYear` is deliberately left alone here. It names the year the map has actually
+        // drawn, and toggling a domain doesn't draw anything by itself — the clamped `year` above
+        // flows through the same commit/settle pump as any other year change, and `renderedYear`
+        // catches up once that lands, exactly as it does during normal playback. Clamping it here
+        // too would have the readout claim a year was on screen before the map painted it.
       };
     }),
 

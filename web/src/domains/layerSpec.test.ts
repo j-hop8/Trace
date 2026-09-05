@@ -17,6 +17,7 @@ import {
   layerIdsForMode,
   layerIdsForYear,
   layersFor,
+  opacityChannel,
   opacityUpdatesFor,
 } from '@/domains/layerSpec';
 import type { DomainManifestEntry } from '@/domains/manifest';
@@ -49,10 +50,8 @@ const ROLES = 7;
 /** `trace-forest-cleared-fill-2013` → `cleared-fill`. */
 const roleOf = (id: string) => id.replace(`trace-${entry.id}-`, '').replace(/-\d{4}$/, '');
 
-const opacityOf = (layer: { type: string; paint?: unknown }) => {
-  const paint = (layer.paint ?? {}) as Record<string, unknown>;
-  return (layer.type === 'fill' ? paint['fill-opacity'] : paint['line-opacity']) as number;
-};
+const opacityOf = (layer: { type: 'fill' | 'line'; paint?: unknown }) =>
+  opacityChannel({ type: layer.type, paint: (layer.paint ?? {}) as Record<string, unknown> }).shown;
 
 describe('cohorts', () => {
   it('spans exactly the range the manifest claims', () => {
@@ -128,7 +127,7 @@ describe('the year is opacity, never a filter', () => {
 
     for (const layer of layers) {
       const paint = layer.paint as Record<string, unknown>;
-      const key = layer.type === 'fill' ? 'fill-opacity' : 'line-opacity';
+      const { key } = opacityChannel({ type: layer.type, paint });
       expect(paint[`${key}-transition`]).toEqual({ duration: 0, delay: 0 });
     }
   });
@@ -137,7 +136,7 @@ describe('the year is opacity, never a filter', () => {
     const { layers } = layersFor(entry, 2013, 'change');
     const withoutOpacity = (layer: (typeof layers)[number]) => {
       const paint = { ...(layer.paint as Record<string, unknown>) };
-      const key = layer.type === 'fill' ? 'fill-opacity' : 'line-opacity';
+      const { key } = opacityChannel({ type: layer.type, paint });
       delete paint[key];
       delete paint[`${key}-transition`];
       return JSON.stringify([layer.type, layer.source, paint]);
