@@ -1,0 +1,318 @@
+"""Water domain — JRC Global Surface Water extraction.
+
+**The version probe.** `config.GSW_V15_YEARLY` is a *project-hosted* Earth Engine asset, not a
+catalog one, so read access is never guaranteed the way `JRC/GSW1_4/...` is. Every entry point
+that needs the domain's range probes it first and falls back to v1.4 alone rather than assuming —
+see :func:`gsw_v15_reachable` and :meth:`WaterDomain._resolve`. The range actually obtained is what
+`temporal_range()` reports, never a hardcoded 2024.
+
+**Per-pixel first/last water year.** JRC's `YearlyHistory` collection is one image per year, each
+pixel classed `WATER_CLASS_NOT_WATER` / `_SEASONAL` / `_PERMANENT` (`config.WATER_CLASS_*`). A
+pixel counts as water in a given year at `_SEASONAL` or above. Stacking every year's water mask,
+tagging each with its own year, and reducing the stack with `min`/`max` gives the first and last
+year each pixel was observed as water — the same "reduce a per-year stack" shape as forest's
+per-year loop, just resolved as one reduction over the time axis instead of one Earth Engine
+request per year, because there is no per-pixel encoded date to decode here the way Hansen's
+`lossyear` has one.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from trace_pipeline import config
+from trace_pipeline.domains.base import Domain, SourceInfo, register
+
+logger = logging.getLogger(__name__)
+
+METHOD = "JRC GSW yearly waterClass"
+
+#: JRC's own accuracy figures for the yearly water classification are global, not per-pixel or
+#: per-biome, so — same reasoning as Hansen's flat CONFIDENCE in forest.py — one honest flat value
+#: is correct here rather than a fabricated per-feature score.
+CONFIDENCE = 0.8
+
+#: The `transition` band of `config.GSW_MAPPING_LAYERS` (JRC's own class codes), carried through
+#: as `subtype`. Not a Trace invention — this is JRC's published encoding for how a pixel's water
+#: state moved between the first and second half of the observed record.
+GSW_TRANSITION_CLASSES: dict[int, str] = {
+    1: "permanent",
+    2: "new permanent",
+    3: "lost permanent",
+    4: "seasonal",
+    5: "new seasonal",
+    6: "lost seasonal",
+    7: "seasonal to permanent",
+    8: "permanent to seasonal",
+    9: "ephemeral permanent",
+    10: "ephemeral seasonal",
+}
+
+#: Minimum mapping unit, in pixels rather than hectares — same reason as forest's
+#: `config.MIN_PATCH_PIXELS`: both sources share `config.NATIVE_SCALE_M`, and a Landsat pixel's
+#: true geodesic area varies with latitude, so an area threshold would silently behave as a
+#: different pixel count depending on where in Taiwan a patch sits. Counting pixels does not.
+#: Two pixels, matching forest's choice, until a water-specific measurement says otherwise — 埤塘
+#: (irrigation ponds) run smaller than forest patches on average, so this floor should be revisited
+#: once real polygon counts are in.
+MIN_PATCH_PIXELS = 2
+
+#: JRC's own pixel geometry differs slightly from Hansen's; used only to state the mapping floor
+#: in the caveat, exactly like forest's `TAIWAN_PIXEL_HA`, never for filtering. GSW is nominally
+#: `config.NATIVE_SCALE_M` (30 m) like Hansen, so the same ~0.071 ha/pixel figure applies until a
+#: real extraction measures JRC's actual grid.
+WATER_PIXEL_HA = 0.071
+
+
+def gsw_v15_reachable() -> bool:
+    """Whether the project-hosted v1.5 asset can actually be read right now.
+
+    A module-level function, not a method, so a test can replace it with a fixed answer without
+    touching `WaterDomain` at all. Every failure mode — permission denied, asset moved, asset
+    simply not shared with this Earth Engine project — means the same thing here: fall back to
+    v1.4, so they are all folded into one `False` rather than distinguished.
+    """
+    import ee
+
+    try:
+        ee.ImageCollection(config.GSW_V15_YEARLY).limit(1).size().getInfo()
+        return True
+    except Exception:  # noqa: BLE001 -- unreachable is unreachable, whatever the cause
+        return False
+
+
+def derive_change_type(first_year: int, last_year: int, range_first: int, range_last: int) -> str:
+    """The B4 `change_type` for a patch observed as water from `first_year` to `last_year`.
+
+    Priority is loss, then gain, then stable — not the ticket's listing order, but the order that
+    matches what a reader most needs to know. A pond that both appeared and disappeared within the
+    record (e.g. built, then drained, before the last observed year) is more usefully flagged as a
+    loss than a gain: "this is gone" is the more actionable fact than "this once arrived."
+
+    - `last_year < range_last`: it stopped being water before the record ends — **loss**, whatever
+      happened at the start.
+    - `first_year > range_first`: it was not there at the start but is still water at the end —
+      **gain**.
+    - Otherwise it was water at the start and still is at the end — **stable**.
+    """
+    if last_year < range_last:
+        return "loss"
+    if first_year > range_first:
+        return "gain"
+    return "stable"
+
+
+def build_feature(
+    geometry: dict[str, Any],
+    *,
+    first_year: int,
+    last_year: int,
+    range_first: int,
+    range_last: int,
+    area_ha: float,
+    gsw_asset: str,
+    transition_code: int | None = None,
+) -> dict[str, Any]:
+    """Assemble one B4 feature from a vectorized water patch.
+
+    `valid_to` is `None` exactly when the patch is still water in the final observed year — an
+    open-ended feature, same convention as forest's loss/extent — and is otherwise `last_year`,
+    the last year this patch was actually seen as water.
+    """
+    from trace_pipeline.schema import TraceFeature
+
+    change_type = derive_change_type(first_year, last_year, range_first, range_last)
+    valid_to = None if last_year >= range_last else last_year
+    subtype = GSW_TRANSITION_CLASSES.get(transition_code) if transition_code is not None else None
+
+    feature = TraceFeature(
+        domain=WaterDomain.id,
+        valid_from=first_year,
+        valid_to=valid_to,
+        change_type=change_type,  # type: ignore[arg-type]  -- validated against the schema, not the stale Literal
+        metric={"area_ha": round(area_ha, 4)},
+        source=gsw_asset,
+        method=METHOD,
+        confidence=CONFIDENCE,
+        subtype=subtype,
+    )
+    return feature.to_geojson_feature(geometry)
+
+
+@register
+class WaterDomain(Domain):
+    id = "water"
+    label = {"en": "Water", "zh": "水體"}
+    change_types = ("loss", "gain", "stable")
+
+    def __init__(self) -> None:
+        # Resolved once per instance, on first need, and reused — the probe is a real network
+        # call, and `temporal_range()` and `extract()` must agree on which version they used
+        # without each paying for (or risking a different answer from) a second probe.
+        self._resolved: tuple[int, int, str] | None = None
+
+    def _resolve(self) -> tuple[int, int, str]:
+        """`(first_year, last_year, asset_id)` actually available, probing v1.5 at most once."""
+        if self._resolved is None:
+            if gsw_v15_reachable():
+                last = config.GSW_V15_LAST_YEAR
+                asset = config.GSW_V15_YEARLY
+                logger.info(
+                    "water: GSW v1.5 reachable, using %s (%d-%d)",
+                    asset,
+                    config.GSW_FIRST_YEAR,
+                    last,
+                )
+            else:
+                last = config.GSW_V14_LAST_YEAR
+                asset = config.GSW_V14_YEARLY
+                logger.info(
+                    "water: GSW v1.5 unreachable, falling back to %s (%d-%d)",
+                    asset,
+                    config.GSW_FIRST_YEAR,
+                    last,
+                )
+            self._resolved = (config.GSW_FIRST_YEAR, last, asset)
+        return self._resolved
+
+    @property
+    def source(self) -> SourceInfo:
+        _, last, asset = self._resolve()
+        version = "v1.5" if asset == config.GSW_V15_YEARLY else "v1.4"
+        return SourceInfo(
+            name="JRC Global Surface Water",
+            version=f"{version} (1984-{last})",
+            attribution="Source: EC JRC/Google",
+            citation=(
+                "Pekel et al., 'High-resolution mapping of global surface water and its "
+                "long-term changes', Nature 540 (2016)"
+            ),
+            licence="Free to use with attribution",
+        )
+
+    @property
+    def caveat(self) -> str:
+        first, last = self.temporal_range()
+        pixel_ha = MIN_PATCH_PIXELS * WATER_PIXEL_HA
+        return (
+            f"Surface water at {config.NATIVE_SCALE_M} m resolution, {first}-{last}. Isolated "
+            f"single pixels (under about {pixel_ha:.2f} ha) are not mapped, so the smallest 埤塘 "
+            "(irrigation ponds) may be missed entirely, or merged with a neighbour if they sit "
+            "closer together than one pixel."
+        )
+
+    def temporal_range(self) -> tuple[int, int]:
+        first, last, _ = self._resolve()
+        return (first, last)
+
+    def _yearly_water_class(self, aoi: Any) -> Any:
+        """The per-year `waterClass` stack over `aoi`, v1.4 alone or extended with v1.5.
+
+        v1.5 is published as an extension of v1.4's coverage, not a full replacement — merging
+        picks up v1.4's own years unchanged and appends v1.5's images only for the years beyond
+        v1.4's own range, rather than asking v1.5 to re-supply years v1.4 already has.
+        """
+        import ee
+
+        first, last, asset = self._resolve()
+        v14 = ee.ImageCollection(config.GSW_V14_YEARLY).filter(
+            ee.Filter.And(
+                ee.Filter.gte("year", first), ee.Filter.lte("year", config.GSW_V14_LAST_YEAR)
+            )
+        )
+        if asset == config.GSW_V14_YEARLY:
+            return v14
+
+        extension = ee.ImageCollection(config.GSW_V15_YEARLY).filter(
+            ee.Filter.And(
+                ee.Filter.gt("year", config.GSW_V14_LAST_YEAR), ee.Filter.lte("year", last)
+            )
+        )
+        return v14.merge(extension)
+
+    def water_stats_image(self, aoi: Any) -> Any:
+        """The 3-band ee.Image of `first_year` / `last_year` / `transition`, clipped to `aoi`.
+
+        Each year's image is masked to where it was observed as water and tagged with its own
+        year; reducing the masked stack with `min`/`max` gives, per pixel, the first and last year
+        it was seen as water. A pixel never observed as water has no contributing image at all and
+        reduces to fully masked, which is what makes `first_year`'s own mask the "was this ever
+        water" mask vectorizing runs against.
+        """
+        import ee
+
+        stack = self._yearly_water_class(aoi)
+
+        def tag_year(image: Any) -> Any:
+            year = ee.Image.constant(image.get("year")).toInt16()
+            was_water = image.select("waterClass").gte(config.WATER_CLASS_SEASONAL)
+            return year.updateMask(was_water).rename("year")
+
+        years = stack.map(tag_year)
+        first_year = years.reduce(ee.Reducer.min()).rename("first_year")
+        last_year = years.reduce(ee.Reducer.max()).rename("last_year")
+        transition = (
+            ee.Image(config.GSW_MAPPING_LAYERS).select("transition").rename("transition").toInt8()
+        )
+
+        return first_year.addBands(last_year).addBands(transition).clip(aoi)
+
+    def extract(self, aoi: Any) -> dict[str, Any]:
+        import ee
+
+        from trace_pipeline import extract
+
+        first, last, asset = self._resolve()
+        stats = self.water_stats_image(aoi)
+        ever_water = stats.select("first_year").mask()
+
+        # Vectorized from the boolean mask alone, exactly like forest's loss/extent passes — the
+        # geometry a component gets does not depend on what its pixels' first/last year happen to
+        # be, only on which pixels were ever water and how they connect.
+        component_size = ever_water.connectedPixelCount(maxSize=16, eightConnected=False)
+        kept = ever_water.updateMask(component_size.gte(MIN_PATCH_PIXELS)).selfMask()
+
+        regions = kept.reduceToVectors(
+            geometry=aoi,
+            crs=stats.select("first_year").projection(),
+            geometryType="polygon",
+            eightConnected=False,
+            maxPixels=int(1e10),
+        )
+
+        # A water body's pixels do not all start or end in the same year -- a pond that grew
+        # outward has older water at its centre than at its edge. `mean` gives each polygon a
+        # representative onset/end year rather than requiring one that does not exist. `transition`
+        # is categorical, so its mean is an approximation of the dominant class, not the class
+        # itself; good enough until a real extraction shows it needs `mode` instead.
+        stats_by_region = stats.reduceRegions(
+            collection=regions,
+            reducer=ee.Reducer.mean(),
+            crs=stats.select("first_year").projection(),
+        )
+
+        def tag_area(feature: Any) -> Any:
+            area_ha = feature.geometry().area(maxError=1).divide(config.M2_PER_HA)
+            return feature.set("area_ha", area_ha)
+
+        raw = extract.download_features(stats_by_region.map(tag_area), description="water extent")
+
+        features: list[dict[str, Any]] = []
+        for item in raw:
+            props = item["properties"]
+            features.append(
+                build_feature(
+                    geometry=item["geometry"],
+                    first_year=round(props["first_year"]),
+                    last_year=round(props["last_year"]),
+                    range_first=first,
+                    range_last=last,
+                    area_ha=props["area_ha"],
+                    gsw_asset=asset,
+                    transition_code=round(props["transition"]) if "transition" in props else None,
+                )
+            )
+
+        print(f"  {len(features):,} water patches, GSW {asset}", flush=True)
+        return {"type": "FeatureCollection", "features": features}
