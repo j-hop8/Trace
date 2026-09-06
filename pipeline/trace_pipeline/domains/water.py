@@ -124,19 +124,22 @@ CHANGE_TYPE_BY_TRANSITION: dict[int, str] = {
 #: reduced at `config.WATER_CLASS_PERMANENT`; until one exists, the record's start is the honest
 #: `valid_from` and the `gain` still carries the change.
 #:
-#: Derived from JRC's own naming rather than hand-listed — a class is already-water in epoch 1
-#: unless it arrived (`new ...`) or never held either epoch's stable state (`ephemeral ...`) — and
-#: a test enforces that, because hand-keeping this list is exactly how 7 went missing.
+#: The membership below is written by hand; what is *derived* is the check on it. A test reads
+#: JRC's own naming — a class is already-water in epoch 1 unless it arrived (`new ...`) or never
+#: held either epoch's stable state (`ephemeral ...`) — and fails if this set disagrees. Editing
+#: `GSW_TRANSITION_CLASSES` therefore does not update this set; it breaks the test, which is the
+#: point. Hand-keeping the list *and* its check is exactly how 7 went missing.
 PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 7, 8})
 
 #: Classes where the water actually stopped, and so are the only ones that get a `valid_to`.
 #: `permanent to seasonal` (8) is pointedly not here: that water declined, it did not end, so its
 #: state is still current.
 #:
-#: Derived from JRC's own naming rather than hand-listed, for the same reason as
-#: `PRESENT_AT_START` above — a class ended iff it was `lost ...` (held its state through epoch 1
-#: and was gone by epoch 2) or `ephemeral ...` (came and went inside the record) — and a test
-#: enforces that. This membership is correct today; hand-keeping it is how it would stop being.
+#: Hand-written and test-checked, exactly as `PRESENT_AT_START` above and for the same reason:
+#: a test derives the expected membership from JRC's naming — a class ended iff it was `lost ...`
+#: (held its state through epoch 1 and was gone by epoch 2) or `ephemeral ...` (came and went
+#: inside the record) — so this set cannot drift without failing. It was correct before that test
+#: existed; nothing made it stay correct, which is the gap the test closes.
 ENDED: frozenset[int] = frozenset({3, 6, 9, 10})
 
 #: Classes dropped where `config.WORLDCOVER_MANAGED_CLASSES` says the ground is built on or farmed

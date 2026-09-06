@@ -25,6 +25,17 @@ def _reset_gsw_probe_cache():
     water._resolved_gsw = None
 
 
+def _jrc_name_starts(code: int, *prefixes: str) -> bool:
+    """Does JRC's own name for `code` begin with one of `prefixes`?
+
+    The vocabulary of those prefixes is the rule both `PRESENT_AT_START` and `ENDED` are checked
+    against, so the *mechanism* lives here once while each test keeps its own prefixes in plain
+    sight -- a helper that also hid which prefixes a rule uses would be the hand-kept list again,
+    one indirection further away.
+    """
+    return water.GSW_TRANSITION_CLASSES[code].startswith(prefixes)
+
+
 SQUARE = {
     "type": "Polygon",
     "coordinates": [[[121.216, 24.993], [121.226, 24.993], [121.226, 25.003], [121.216, 24.993]]],
@@ -104,7 +115,7 @@ def test_present_at_start_follows_jrcs_class_names_rather_than_a_hand_kept_list(
     stable state (`ephemeral ...`).
     """
     for code, name in water.GSW_TRANSITION_CLASSES.items():
-        arrived_or_flickered = name.startswith("new ") or name.startswith("ephemeral ")
+        arrived_or_flickered = _jrc_name_starts(code, "new ", "ephemeral ")
         assert (code in water.PRESENT_AT_START) is not arrived_or_flickered, (
             f"class {code} ({name}) is on the wrong side of PRESENT_AT_START"
         )
@@ -131,10 +142,11 @@ def test_a_measured_onset_cannot_fall_outside_the_published_range():
 
 
 def test_only_ended_classes_close():
-    assert water.derive_valid_to(3, 2015, 2021) == 2015  # lost permanent
-    assert water.derive_valid_to(6, 2015, 2021) == 2015  # lost seasonal
-    assert water.derive_valid_to(9, 2015, 2021) == 2015  # ephemeral permanent
-    assert water.derive_valid_to(10, 2015, 2021) == 2015  # ephemeral seasonal
+    """Driven off `ENDED` itself so a class correctly added to it is actually exercised here,
+    rather than passing the membership guard while its closing behaviour goes untested."""
+    for code in water.ENDED:
+        name = water.GSW_TRANSITION_CLASSES[code]
+        assert water.derive_valid_to(code, 2015, 2021) == 2015, f"{code} ({name}) did not close"
 
 
 def test_ended_follows_jrcs_class_names_rather_than_a_hand_kept_list():
@@ -146,15 +158,20 @@ def test_ended_follows_jrcs_class_names_rather_than_a_hand_kept_list():
     through epoch 1 and was gone by epoch 2) or `ephemeral ...` (came and went inside the record).
     """
     for code, name in water.GSW_TRANSITION_CLASSES.items():
-        ended = name.startswith("lost ") or name.startswith("ephemeral ")
+        ended = _jrc_name_starts(code, "lost ", "ephemeral ")
         assert (code in water.ENDED) is ended, (
             f"class {code} ({name}) is on the wrong side of ENDED"
         )
+    # The loop above only visits the roster, so on its own it cannot see a code in `ENDED` that
+    # JRC never defined. Same containment check `MASK_ON_MANAGED_LAND` already gets.
+    assert water.ENDED.issubset(water.GSW_TRANSITION_CLASSES)
 
 
-def test_the_rule_for_ended_does_not_swallow_merely_declining_water():
-    """The case the derivation has to get right, and the one a looser rule -- `change_type is
-    loss` -- would get wrong: `permanent to seasonal` is a `loss` that is not an ending."""
+def test_ended_is_a_strict_subset_of_the_loss_classes():
+    """Pins class 8 as the case a looser rule -- `ended iff change_type is loss` -- would get
+    wrong: `permanent to seasonal` is a `loss` that is not an ending. Asserts the constants
+    directly rather than the naming rule, which is
+    `test_ended_follows_jrcs_class_names_rather_than_a_hand_kept_list`'s job."""
     losses = {c for c, ct in water.CHANGE_TYPE_BY_TRANSITION.items() if ct == "loss"}
     assert 8 in losses
     assert 8 not in water.ENDED
@@ -162,8 +179,12 @@ def test_the_rule_for_ended_does_not_swallow_merely_declining_water():
 
 
 def test_persisting_classes_stay_open_ended():
-    for code in (1, 2, 4, 5, 7):
-        assert water.derive_valid_to(code, 2015, 2021) is None
+    """The complement of `ENDED` over the roster, not a hand-kept tuple -- the same anti-pattern
+    that let class 7 go missing. Every class JRC defines is now covered by this test or the one
+    above, whichever side of `ENDED` it falls on."""
+    for code in water.GSW_TRANSITION_CLASSES.keys() - water.ENDED:
+        name = water.GSW_TRANSITION_CLASSES[code]
+        assert water.derive_valid_to(code, 2015, 2021) is None, f"{code} ({name}) closed"
 
 
 def test_declining_water_is_loss_but_has_not_ended():
