@@ -113,7 +113,21 @@ CHANGE_TYPE_BY_TRANSITION: dict[int, str] = {
 #: These take `valid_from = range_first` and are never dated by measurement — see the module
 #: docstring on why a `min` over a record that is 100% blind in 1985 dates the observation rather
 #: than the water.
-PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 8})
+#:
+#: `seasonal to permanent` (7) is here despite being a `gain`, and was missed on the first pass
+#: because it reads as an arrival. JRC's class says the pixel was *seasonal water* in epoch 1: the
+#: water was already there and only its permanence changed. Measuring its onset therefore lands it
+#: in the same 1988-93 pile-up as every other pre-record body — and the measurement does not even
+#: answer the question the class poses, because `water_stats_image` tags a year wherever
+#: `waterClass >= WATER_CLASS_SEASONAL`, so a measured onset is the first year the pixel was seen
+#: as *any* water, never the year it became permanent. Dating that would need a second stack
+#: reduced at `config.WATER_CLASS_PERMANENT`; until one exists, the record's start is the honest
+#: `valid_from` and the `gain` still carries the change.
+#:
+#: Derived from JRC's own naming rather than hand-listed — a class is already-water in epoch 1
+#: unless it arrived (`new ...`) or never held either epoch's stable state (`ephemeral ...`) — and
+#: a test enforces that, because hand-keeping this list is exactly how 7 went missing.
+PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 7, 8})
 
 #: Classes where the water actually stopped, and so are the only ones that get a `valid_to`.
 #: `permanent to seasonal` (8) is pointedly not here: that water declined, it did not end, so its
@@ -452,9 +466,10 @@ class WaterDomain(Domain):
             "the class region, not the body. Loss here is broader than disappearance: it bundles "
             "water that was only ever ephemeral, seasonal water that went, and permanent water "
             "that dropped to seasonal but is still present. Permanent water that vanished outright "
-            f"is about {config.WATER_LOST_PERMANENT_PCT:.0f}% of the layer. "
+            f"is about {config.WATER_LOST_PERMANENT_PCT:.1f}% of the layer. "
             f"Isolated single pixels (under about {pixel_ha:.2f} ha) are not mapped, keeping about "
-            f"{config.WATER_RETAINED_PCT:.0f}% of the water area the source records for Taiwan, so "
+            f"{config.WATER_RETAINED_PCT:.0f}% of the water that survives the managed-land rule "
+            "below, so "
             "the smallest 埤塘 (irrigation ponds) may be missed entirely, or merged with a "
             "neighbour if they sit closer together than one pixel. "
             "Seasonal water on ground that is built on or farmed is deliberately left out. At 30 m "
@@ -469,6 +484,14 @@ class WaterDomain(Domain):
             "cities and farmland remain. That reference is a single 2021 snapshot, so genuine "
             "seasonal water in a district built up or brought into cultivation during the record "
             "is removed along with the artefacts. "
+            "Between that rule and the mapping floor, this layer holds about "
+            f"{config.WATER_SOURCE_RETAINED_PCT:.1f}% of the water area the source records for "
+            "Taiwan. "
+            "Regions where the source's two products disagree are left out on top of that: where "
+            "the transition band calls a region arriving or ended but the yearly record never sees "
+            "water there, no onset can be dated, and the region is dropped rather than given a "
+            "guessed year. Each extraction run reports that count; it is not yet folded into the "
+            "percentages above. "
             "Gain means a body holds water more of the time than the early record shows, not that "
             "water appeared where there was none: satellite revisit roughly doubled over the "
             "period, so a body that was always seasonally wet is caught more often later and can "

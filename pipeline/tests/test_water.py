@@ -89,8 +89,34 @@ def test_classes_present_at_the_start_are_dated_to_the_record_not_measured():
     """The bug that dated 石門水庫 (dam 1964) and 曾文水庫 (1973) to the late 1980s: GSW has no
     usable observation of Taiwan in 1985, so a measured onset dates the observation, not the
     water. For a class JRC defines as already-water in epoch 1, the measurement is ignored."""
-    for code in (1, 3, 4, 6, 8):
+    for code in (1, 3, 4, 6, 7, 8):
         assert water.derive_valid_from(code, 1988, 1984) == 1984
+
+
+def test_present_at_start_follows_jrcs_class_names_rather_than_a_hand_kept_list():
+    """`seasonal to permanent` (7) was missed on the first pass because it reads as an arrival:
+    it is a `gain`, so it was grouped with `new permanent` and `new seasonal` and given a measured
+    onset -- which put water JRC says was already there in epoch 1 back in the blind 1988-93 years,
+    the exact artefact this module exists to remove.
+
+    JRC's naming is the rule and is checkable, so check it rather than re-listing the codes: a
+    class is already-water in epoch 1 unless it arrived (`new ...`) or never held either epoch's
+    stable state (`ephemeral ...`).
+    """
+    for code, name in water.GSW_TRANSITION_CLASSES.items():
+        arrived_or_flickered = name.startswith("new ") or name.startswith("ephemeral ")
+        assert (code in water.PRESENT_AT_START) is not arrived_or_flickered, (
+            f"class {code} ({name}) is on the wrong side of PRESENT_AT_START"
+        )
+
+
+def test_water_already_there_in_epoch_one_is_never_dated_by_measurement():
+    """The measured onset cannot answer class 7's question even in principle: `water_stats_image`
+    tags a year wherever `waterClass >= WATER_CLASS_SEASONAL`, so it reports the first year the
+    pixel was seen as *any* water, never the year it became permanent."""
+    assert water.derive_valid_from(7, 1991, 1984) == 1984
+    assert water.derive_valid_to(7, 2015, 2021) is None  # becoming permanent is not an ending
+    assert water.derive_change_type(7) == "gain"  # and the change is still carried
 
 
 def test_arriving_classes_keep_their_measured_onset():
@@ -402,6 +428,29 @@ def test_caveat_states_the_retained_percentage_not_just_the_threshold(monkeypatc
     assert f"{config.WATER_RETAINED_PCT:.0f}%" in water.WaterDomain().caveat
 
 
+def test_caveat_states_completeness_against_the_source_not_just_against_the_sieve(monkeypatch):
+    """WATER_RETAINED_PCT's denominator is post-managed-land-mask, so quoting it alongside the
+    mask's own cost let a reader read 88% as "88% of JRC's water is here" when the layer holds
+    about 75%. Both cuts are stated, and so is what they compose to."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert f"{config.WATER_SOURCE_RETAINED_PCT:.1f}%" in caveat
+    # And the sieve figure no longer claims the source's total as its base.
+    assert f"{config.WATER_RETAINED_PCT:.0f}% of the water area the source records" not in caveat
+
+
+def test_caveat_admits_the_regions_dropped_as_undatable(monkeypatch):
+    """`extract` skips a region whose class needs a measured year the yearly stack cannot supply.
+    That is a fourth way the layer is smaller than its source, and the honesty rule that governs
+    the other three governs it too -- it cannot be left to the run log alone."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "no onset can be dated" in caveat
+    assert "not yet folded into the percentages" in caveat
+
+
 def test_caveat_admits_the_early_record_is_blind(monkeypatch):
     """GSW has no usable observation of Taiwan in 1985 and little before 1988, so a start date is
     when watching began rather than when the water arrived. That is the artefact that prompted this
@@ -475,4 +524,4 @@ def test_caveat_says_what_loss_bundles(monkeypatch):
     caveat = water.WaterDomain().caveat
 
     assert "ephemeral" in caveat
-    assert f"{config.WATER_LOST_PERMANENT_PCT:.0f}%" in caveat
+    assert f"{config.WATER_LOST_PERMANENT_PCT:.1f}%" in caveat

@@ -148,7 +148,10 @@ FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 #
 # The denominator is post-managed-land-mask (117,685 ha), not JRC's full 134,600 ha, so this and
 # WATER_MANAGED_SEASONAL_DROPPED_PCT below describe two different cuts and do not double-count the
-# same hectares. The caveat quotes them as two separate facts for the same reason.
+# same hectares. The caveat quotes them as two separate facts for the same reason -- and, because
+# quoting only those two invites a reader to take this figure as the layer's completeness against
+# the source, states WATER_SOURCE_RETAINED_PCT as well. Never describe this number as a share of
+# what the source records: it is a share of what reaches the sieve.
 #
 # Measured per class region, not per water body, because that is what a feature now is: water.py
 # segments on JRC's transition class, so the sieve applies to the class region and a large lake
@@ -164,16 +167,47 @@ FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 # Re-measure whenever MIN_PATCH_PIXELS or the segmentation changes -- it is quoted to users.
 WATER_RETAINED_PCT: Final[float] = 87.7
 
+# Share of the water area JRC records for Taiwan that survives *both* cuts -- the managed-land rule
+# and the mapping floor -- and so reaches the map. The one number a reader needs to judge the
+# layer's completeness, and the one neither constant above states on its own: WATER_RETAINED_PCT is
+# 87.7% of a post-mask denominator, which is 76.7% of the source, not 87.7% of it.
+#
+# 101,567 of 134,600 ha, the shipped vector total against JRC's classed water. Arithmetic over two
+# recorded measurements rather than its own probe, so it is the figure to confirm first on the next
+# full run. It is deliberately the *vector* total and not the 103,175 ha post-sieve raster figure
+# behind WATER_RETAINED_PCT: the ~1.6% between them is lost to vectorizing, cell edges and the
+# undatable regions water.extract drops, and a completeness figure quoted to users has to describe
+# what they actually get rather than what survived one intermediate step.
+#
+# Quoted to one decimal, unlike WATER_RETAINED_PCT: 75.46% stored as 75.5 and then rendered whole
+# would round twice and reach the reader as 76%, overstating completeness by half a point on a
+# formatting artefact. Any figure that lands near a .5 boundary gets the decimal.
+#
+# Re-measure whenever either cut above changes.
+WATER_SOURCE_RETAINED_PCT: Final[float] = 75.5
+
 # Share of the water layer's area that is permanent water which disappeared outright -- JRC's
-# `lost permanent` class alone, 3,547 of 117,204 ha.
+# `lost permanent` class alone, 3,547 of 101,567 ha.
 #
 # Quoted because `loss` paints about a third of this layer red, and a third of Taiwan's water did
-# not vanish. That red bundles four different JRC classes: water that was only ever ephemeral
-# (11.0% of the layer), seasonal water that went (9.4%), permanent water that dropped to seasonal
-# but is still there (8.5%), and only then permanent water that actually went. Stating the
-# threshold without this composition would let a reader take the whole third as disappearance --
-# the same failure mode the forest caveat's retained-percentage rule exists to prevent.
-WATER_LOST_PERMANENT_PCT: Final[float] = 3.0
+# not vanish. That red bundles four different JRC classes: water that was only ever ephemeral,
+# seasonal water that went, permanent water that dropped to seasonal but is still there, and only
+# then permanent water that actually went. Stating the threshold without this composition would let
+# a reader take the whole third as disappearance -- the same failure mode the forest caveat's
+# retained-percentage rule exists to prevent.
+#
+# The numerator is untouched by the managed-land rule (class 3 is kept, and T-019 measured every
+# non-masked class unchanged to the hectare) but the *denominator* is not: this read 3.0 against
+# T-017's 117,204 ha layer and was carried through T-018 and T-019 while they cut the layer to
+# 101,567 ha, so the share it states had drifted low by half a point. Recomputed from those two
+# recorded figures rather than re-probed, hence the extra decimal in the caveat -- 3.5 is close
+# enough to the .0f rounding boundary that quoting it whole would flip between 3% and 4% on noise.
+#
+# The per-class composition that used to sit in this comment was measured on the same stale
+# denominator and two of its classes (9 and 10) are cut by the managed-land rule, so it is not
+# rescalable and has been dropped rather than restated wrongly. Re-measure it, and this, on the
+# next full run -- and whenever MASK_ON_MANAGED_LAND changes, since that moves the denominator.
+WATER_LOST_PERMANENT_PCT: Final[float] = 3.5
 
 # Share of JRC's classed water area removed by the managed-land rule
 # (water.MASK_ON_MANAGED_LAND): 4.7% on built-up ground plus 7.8% on cropland.
