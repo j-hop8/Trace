@@ -5,7 +5,7 @@ import {
   HATCH_IMAGE,
   createHatchImage,
   layerIdsFor,
-  layerIdsForMode,
+  layerIdsForSelection,
   layerIdsForYear,
   layersFor,
   opacityUpdatesFor,
@@ -75,8 +75,8 @@ const RELOAD_TIMEOUT_MS = 15000;
 export function useDomainLayers(map: maplibregl.Map | null) {
   const manifest = useTraceStore((s) => s.manifest);
   const activeDomains = useTraceStore((s) => s.activeDomains);
-  const viewModes = useTraceStore((s) => s.viewModes);
-  const viewModeFor = useTraceStore((s) => s.viewModeFor);
+  const selectedTypes = useTraceStore((s) => s.selectedTypes);
+  const selectedTypesFor = useTraceStore((s) => s.selectedTypesFor);
   const year = useTraceStore((s) => s.year);
   const setRenderedYear = useTraceStore((s) => s.setRenderedYear);
   const setLoadingDomains = useTraceStore((s) => s.setLoadingDomains);
@@ -178,7 +178,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       const present = Boolean(map.getSource(sourceId(entry.id)));
 
       if (shouldBeVisible && !present) {
-        const spec = layersFor(entry, year, viewModeFor(entry.id));
+        const spec = layersFor(entry, year, selectedTypesFor(entry.id));
         map.addSource(spec.sourceId, spec.source);
         // Under the basemap's labels, not over them. Appending with no `beforeId` puts data on
         // top of everything, and the extent view is a near-solid mass -- it covered every place
@@ -206,7 +206,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     // those apart from a reload of its own. Abandon the wait and force the next pump to re-apply,
     // so a toggle mid-playback recovers instead of wedging.
     return () => cancelCommit.current?.();
-    // `year` and the view mode are read when a layer is first added but are not dependencies:
+    // `year` and the state selection are read when a layer is first added but are not dependencies:
     // re-adding sources on every tick or toggle would refetch tiles and defeat the whole point.
     // Both are applied to live layers by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -262,21 +262,21 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     };
   }, [map, manifest, activeDomains, basemapPainted, setLoadingDomains]);
 
-  // Apply the view mode. Both views' layers already exist, so this is a visibility switch — no
-  // source churn, no refetch, and the toggle is instant.
+  // Apply the state selection. Every change type's layers already exist, so this is a visibility
+  // switch — no source churn, no refetch, and the toggle is instant.
   useEffect(() => {
     if (!map || !manifest) return;
 
     for (const entry of manifest.domains) {
       if (!activeDomains.has(entry.id)) continue;
 
-      const visible = new Set(layerIdsForMode(entry, viewModeFor(entry.id)));
+      const visible = new Set(layerIdsForSelection(entry, selectedTypesFor(entry.id)));
       for (const id of layerIdsFor(entry)) {
         if (!map.getLayer(id)) continue;
         map.setLayoutProperty(id, 'visibility', visible.has(id) ? 'visible' : 'none');
       }
     }
-  }, [map, manifest, activeDomains, viewModes, viewModeFor]);
+  }, [map, manifest, activeDomains, selectedTypes, selectedTypesFor]);
 
   // Commit the year to the map, one step at a time.
   //

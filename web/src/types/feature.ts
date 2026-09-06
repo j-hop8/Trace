@@ -15,6 +15,16 @@
 export type ChangeType = 'extent' | 'gain' | 'loss' | 'stable';
 
 /**
+ * Every change type, in the order they should be drawn and listed.
+ *
+ * Not the union's declaration order, which is alphabetical and meaningless on a map. This runs from
+ * the ground state outward: the baseline first, then what stayed, then what arrived, then what went
+ * — so `loss` is drawn last and sits on top of whatever it happened to, and a legend built by
+ * walking this reads as a sentence rather than a set.
+ */
+export const CHANGE_TYPE_ORDER: readonly ChangeType[] = ['extent', 'stable', 'gain', 'loss'];
+
+/**
  * A domain id. Deliberately `string` rather than a union of 'water' | 'forest': the web app
  * learns which domains exist from the manifest at runtime, so hardcoding them here would
  * reintroduce exactly the coupling the manifest exists to remove.

@@ -6,9 +6,9 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
 
-import type { DomainId, TraceFeatureProperties } from '@/types/feature';
-import { combinedRange } from '@/domains/manifest';
-import type { DomainManifest, DomainManifestEntry, ViewMode } from '@/domains/manifest';
+import type { ChangeType, DomainId, TraceFeatureProperties } from '@/types/feature';
+import { combinedRange, selectableTypes } from '@/domains/manifest';
+import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
 
 export interface SelectedFeature {
   properties: TraceFeatureProperties;
@@ -35,14 +35,19 @@ interface TraceState {
   loadingDomains: Set<DomainId>;
 
   /**
-   * Which question each domain is answering — see `ViewMode`.
+   * Which of each domain's states the reader has asked to see.
    *
-   * Per domain rather than global: with water and forest both on, one may be worth reading as
-   * change while the other is worth reading as what's left, and a single global switch would
-   * force a choice that has no reason to be shared. Domains absent from the map are in the
-   * default `change` view.
+   * Per domain rather than global: forest's baseline and water's seasonal extent are not the same
+   * question, and a single global switch would force a choice that has no reason to be shared.
+   * Multi-select rather than one-of — this replaced an exclusive `change`/`extent` view switch that
+   * could show forest's canopy or its losses but never both, which is the one comparison the map
+   * exists to make.
+   *
+   * A domain's set is seeded from `selectableTypes` and never contains a state its tileset lacks.
+   * An empty set is not a reachable state: emptying it switches the domain off — see
+   * `toggleChangeType`.
    */
-  viewModes: Map<DomainId, ViewMode>;
+  selectedTypes: Map<DomainId, Set<ChangeType>>;
 
   /**
    * The year the slider is *asking* for. The thumb tracks this, and it moves as fast as the user
@@ -66,8 +71,8 @@ interface TraceState {
   setManifest: (manifest: DomainManifest) => void;
   setManifestError: (message: string) => void;
   toggleDomain: (id: DomainId) => void;
-  setViewMode: (id: DomainId, mode: ViewMode) => void;
-  viewModeFor: (id: DomainId) => ViewMode;
+  toggleChangeType: (id: DomainId, changeType: ChangeType) => void;
+  selectedTypesFor: (id: DomainId) => Set<ChangeType>;
   setLoadingDomains: (ids: Set<DomainId>) => void;
   setYear: (year: number) => void;
   /** Called by the map once a requested year is on screen. */
@@ -99,7 +104,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   manifestError: null,
   activeDomains: new Set(),
   loadingDomains: new Set(),
-  viewModes: new Map(),
+  selectedTypes: new Map(),
   year: new Date().getFullYear(),
   renderedYear: new Date().getFullYear(),
   playing: false,
@@ -123,6 +128,11 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       // Everything on by default: the point of the map is the comparison, and a user who has to
       // switch layers on before seeing anything has to already know what to look for.
       activeDomains: new Set(manifest.domains.map((d) => d.id)),
+      // ...showing every state each one carries. Same reasoning one level down: a reader who has to
+      // switch forest's canopy on before the losses have anything to be losses *of* has to already
+      // know what the map is for. `selectableTypes` is what keeps this honest — a domain is seeded
+      // with what its tileset actually holds, never with a fixed list of states.
+      selectedTypes: new Map(manifest.domains.map((d) => [d.id, new Set(selectableTypes(d))])),
       // ...and none of it has arrived yet. Not a guess: the layers are deliberately held back until
       // the basemap has painted, so at this instant every domain is genuinely switched on and
       // showing nothing. The map clears these as each source finishes loading.
@@ -139,10 +149,19 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   toggleDomain: (id) =>
     set((state) => {
       const next = new Set(state.activeDomains);
+      const selectedTypes = new Map(state.selectedTypes);
       if (next.has(id)) {
         next.delete(id);
       } else {
         next.add(id);
+        // A domain goes dark either by this switch or by having its last state un-checked, and it
+        // has to come back the same way from both. Without this, a domain switched off from the
+        // state chips would return still holding the empty set that switched it off — on, and
+        // drawing nothing.
+        if (!selectedTypes.get(id)?.size) {
+          const entry = state.manifest?.domains.find((domain) => domain.id === id);
+          if (entry) selectedTypes.set(id, new Set(selectableTypes(entry)));
+        }
       }
       // A selection belonging to a domain that just went dark would leave an orphaned readout.
       const keepSelection = state.selected && next.has(state.selected.properties.domain);
@@ -150,6 +169,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
 
       return {
         activeDomains: next,
+        selectedTypes,
         // A domain switched off is not loading. Left in, it would come back wearing the badge
         // until the next `sourcedata` happened to correct it.
         loadingDomains: loading,
@@ -166,18 +186,43 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       };
     }),
 
-  setViewMode: (id, mode) =>
+  toggleChangeType: (id, changeType) =>
     set((state) => {
-      const next = new Map(state.viewModes);
-      next.set(id, mode);
-      // The readout describes one feature, and the two views draw different features — a loss
-      // patch stays selected while the map switches to showing what's left of the baseline,
-      // leaving a panel that no longer refers to anything on screen.
-      const keepSelection = state.selected && state.selected.properties.domain !== id;
-      return { viewModes: next, selected: keepSelection ? state.selected : null };
+      const entry = state.manifest?.domains.find((domain) => domain.id === id);
+      if (!entry) return {};
+
+      const current = state.selectedTypes.get(id) ?? new Set(selectableTypes(entry));
+      const nextTypes = new Set(current);
+      if (nextTypes.has(changeType)) nextTypes.delete(changeType);
+      else nextTypes.add(changeType);
+
+      // Un-checking the last state switches the domain off outright. The alternative is a lit
+      // toggle over an empty map, which is indistinguishable from a layer that simply has no data
+      // for the year — the exact confusion the "no data" badge exists to prevent. Making the state
+      // unreachable is cheaper than inventing a third thing for the badge to say.
+      const activeDomains = new Set(state.activeDomains);
+      if (nextTypes.size === 0) activeDomains.delete(id);
+
+      const keepSelection =
+        state.selected !== null &&
+        (state.selected.properties.domain !== id ||
+          nextTypes.has(state.selected.properties.change_type));
+
+      return {
+        selectedTypes: new Map(state.selectedTypes).set(id, nextTypes),
+        activeDomains,
+        // Same three consequences as `toggleDomain`, because switching off the last state is the
+        // same event: a domain that is gone is not loading, an orphaned readout has to go, and the
+        // slider's bounds have changed under the year.
+        loadingDomains: new Set(
+          [...state.loadingDomains].filter((domain) => activeDomains.has(domain)),
+        ),
+        selected: keepSelection ? state.selected : null,
+        year: clampYear(state.year, state.manifest, activeDomains),
+      };
     }),
 
-  viewModeFor: (id) => get().viewModes.get(id) ?? 'change',
+  selectedTypesFor: (id) => get().selectedTypes.get(id) ?? new Set(),
 
   setLoadingDomains: (loadingDomains) => set({ loadingDomains }),
   setYear: (year) => set({ year }),

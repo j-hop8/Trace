@@ -113,10 +113,12 @@ describe.skipIf(!runnable)('cohorts against the built tileset', () => {
 
   it('never sees a feature that expires, which is what cohorts assume', () => {
     // A cohort switches on at its year and never switches off, so a feature carrying a `valid_to`
-    // would keep drawing past its end. The pipeline emits `valid_to: null` for everything today and
-    // tiling drops null attributes, so the key is absent. This is that precondition as a check
-    // rather than a comment: if the pipeline ever starts emitting one, this fails loudly, which is
-    // the signal that the cohort model needs revisiting rather than merely re-running.
+    // would keep drawing past its end. This is that precondition as a check rather than a comment.
+    //
+    // It only covers the domain this file decodes — `domains[0]` — and that is the hole: water's
+    // JRC `lost *` and `ephemeral *` classes *do* carry a `valid_to`, roughly 42k of them, and are
+    // drawn for years in which they no longer existed. Extending this to every domain is part of
+    // T-024, along with the fix; widening it here first would just be a red suite.
     const expiring = features.filter((f) => f.properties.valid_to != null);
 
     expect(expiring).toHaveLength(0);
@@ -127,11 +129,9 @@ describe.skipIf(!runnable)('cohorts against the built tileset', () => {
     for (let y = entry!.temporal.start; y <= entry!.temporal.end; y += 1) years.push(y);
 
     for (const year of years) {
-      // Both views, so the extent baseline and the cleared holes are covered too.
-      const layers = [
-        ...layersFor(entry!, year, 'change').layers,
-        ...layersFor(entry!, year, 'extent').layers,
-      ];
+      // Everything the domain can show, so the extent baseline and the cleared holes are covered
+      // alongside the changes.
+      const layers = layersFor(entry!, year, new Set(entry!.changeTypes ?? [])).layers;
 
       const roles = new Set(
         layers.map((l) => l.id.replace(`trace-${entry!.id}-`, '').replace(/-\d{4}$/, '')),
