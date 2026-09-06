@@ -11,6 +11,17 @@ import pytest
 from trace_pipeline import config, schema
 from trace_pipeline.domains import base, water
 
+
+@pytest.fixture(autouse=True)
+def _reset_gsw_probe_cache():
+    """The resolved GSW version is cached at module scope (every `WaterDomain()` in a process must
+    agree on it), so a value one test's `gsw_v15_reachable` monkeypatch produces would otherwise
+    leak into the next test regardless of that test's own monkeypatch."""
+    water._resolved_gsw = None
+    yield
+    water._resolved_gsw = None
+
+
 SQUARE = {
     "type": "Polygon",
     "coordinates": [[[121.216, 24.993], [121.226, 24.993], [121.226, 25.003], [121.216, 24.993]]],
@@ -182,12 +193,12 @@ def test_temporal_range_uses_v15_when_reachable(monkeypatch):
     assert domain.temporal_range() == (config.GSW_FIRST_YEAR, config.GSW_V15_LAST_YEAR)
 
 
-def test_the_probe_runs_at_most_once_per_instance(monkeypatch):
+def test_the_probe_runs_at_most_once_per_process(monkeypatch):
     """`extract` and `temporal_range` must agree on which version they used.
 
     A second network round-trip could in principle come back differently (the asset could become
     reachable or unreachable between calls), which would silently desync the manifest's range from
-    what was actually extracted -- so the probe is cached the first time this instance needs it.
+    what was actually extracted -- so the probe is cached the first time anything needs it.
     """
     calls = []
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: (calls.append(1), False)[1])
@@ -200,10 +211,29 @@ def test_the_probe_runs_at_most_once_per_instance(monkeypatch):
     assert len(calls) == 1
 
 
+def test_the_probe_is_shared_across_instances_not_just_within_one(monkeypatch):
+    """`cli.py`'s `domain_registry.get()` constructs a fresh WaterDomain per pipeline stage
+    (extract, tiles, manifest) -- an instance-scoped cache would let each stage probe
+    independently and risk disagreeing about which GSW version was used mid-run. The cache has to
+    be shared by every instance in the process, not merely reused within one."""
+    calls = []
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: (calls.append(1), False)[1])
+
+    water.WaterDomain().temporal_range()
+    _ = water.WaterDomain().source
+    _ = water.WaterDomain().caveat
+
+    assert len(calls) == 1
+
+
 def test_source_names_which_gsw_version_was_actually_used(monkeypatch):
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
     assert "v1.4" in water.WaterDomain().source.version
 
+    # The probe is cached at module scope now (every WaterDomain must agree on it within one
+    # process), so getting a second, different answer in this same test needs a fresh cache, not
+    # just a fresh instance -- a real process only ever resolves once per run.
+    water._resolved_gsw = None
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: True)
     assert "v1.5" in water.WaterDomain().source.version
 

@@ -65,16 +65,25 @@ MIN_PATCH_PIXELS = 2
 WATER_PIXEL_HA = 0.071
 
 #: The AOI is split into a WATER_GRID x WATER_GRID grid before extracting, for the same reason as
-#: forest's `EXTENT_GRID`: one request over the whole island cannot carry it. Measured directly —
-#: a ~0.98 deg² slice of northern Taiwan (the country's densest water region) took 53 s for 6,823
-#: features; the full AOI is roughly 9.8x that area, comfortably past what one synchronous request
-#: should be asked to do. Water's per-pixel cost is higher than forest's (a 38-year stack reduction
-#: plus a `reduceRegions` join, against forest's single boolean mask), so this starts at the same
-#: grid forest uses for its own extent pass rather than assuming a coarser one would do.
+#: forest's `EXTENT_GRID`: one request over the whole island cannot carry it. Chosen by
+#: extrapolation, not forest's own more rigorous practice of measuring several grid sizes against
+#: the real, full worst case (`EXTENT_GRID`'s comment records three) — a ~0.98 deg² slice of
+#: northern Taiwan took 53 s for 6,823 features, so this starts at forest's own floor on the
+#: assumption water's heavier per-pixel cost (a 38-year stack reduction plus a `reduceRegions`
+#: join, against forest's single boolean mask) needs at least as fine a grid. The real full run
+#: this shipped with confirms 4 is *sufficient* (30,606 features across 16 cells, one cell alone
+#: carrying 7,599 — already denser than the sampled slice) but not that it is *necessary*; a
+#: pathologically denser cell than any seen so far could still hit the request-too-large failure
+#: forest's own comment documents at 2x2/3x3. Revisit with forest's measure-don't-extrapolate
+#: approach if that ever happens.
 #:
 #: The consequence to remember, same as forest's: a water body straddling a cell edge comes back
 #: as two features, so `area_ha` on a patch describes the piece inside its own cell, not the whole
-#: body. Summing areas from these features is therefore not a way to measure island-wide water.
+#: body — summing areas from these features is therefore not a way to measure island-wide water.
+#: Unlike forest's extent pass, a split here also gives the two pieces independent `first_year`/
+#: `last_year`/`change_type`: a pond that filled in the middle of the record but straddles a cell
+#: boundary can come back as one half "stable" and the other "gain", with no shared record tying
+#: them back into one physical body.
 WATER_GRID = 4
 
 
@@ -85,10 +94,20 @@ def gsw_v15_reachable() -> bool:
     touching `WaterDomain` at all. Every failure mode — permission denied, asset moved, asset
     simply not shared with this Earth Engine project — means the same thing here: fall back to
     v1.4, so they are all folded into one `False` rather than distinguished.
+
+    Initializes Earth Engine itself first, rather than trusting the caller to have done it.
+    `cli.py`'s own module doc promises `trace list` keeps working "while those modules are still
+    being built" — it never calls `extract.initialize()`, since forest's `temporal_range()` is a
+    pure `config` lookup with no such need. Without this, `trace list` would reach here
+    uninitialized, fail inside the `try` below, and silently report the pessimistic v1.4 fallback
+    as if v1.5 had genuinely been checked and found unreachable, even when it would have succeeded.
     """
     import ee
 
+    from trace_pipeline.extract import initialize
+
     try:
+        initialize()
         ee.ImageCollection(config.GSW_V15_YEARLY).limit(1).size().getInfo()
         return True
     except Exception:  # noqa: BLE001 -- unreachable is unreachable, whatever the cause
@@ -136,7 +155,11 @@ def build_feature(
     from trace_pipeline.schema import TraceFeature
 
     change_type = derive_change_type(first_year, last_year, range_first, range_last)
-    valid_to = None if last_year >= range_last else last_year
+    # Derived from `change_type` rather than re-testing `last_year` against `range_last`
+    # independently: `derive_change_type` already answers exactly this question (its `loss`
+    # branch *is* "stopped before the record ends"), and writing the same boundary twice is how
+    # the two could quietly drift apart if that logic's boundary is ever adjusted.
+    valid_to = last_year if change_type == "loss" else None
     subtype = GSW_TRANSITION_CLASSES.get(transition_code) if transition_code is not None else None
 
     feature = TraceFeature(
@@ -153,41 +176,46 @@ def build_feature(
     return feature.to_geojson_feature(geometry)
 
 
+#: `(first_year, last_year, asset_id)` actually available, cached at module rather than instance
+#: scope. `cli.py` constructs a fresh `WaterDomain()` per pipeline stage (`domain_registry.get()`
+#: instantiates on every call), so an instance-scoped cache lets `extract`, `tiles`, and `manifest`
+#: each probe independently — a `trace all` run where v1.5 flips reachable partway through would
+#: extract tiles under one version and then have the manifest describe a different one. Every
+#: instance sharing one process-wide answer is what "probed at most once" actually has to mean.
+_resolved_gsw: tuple[int, int, str] | None = None
+
+
+def _resolve_gsw() -> tuple[int, int, str]:
+    global _resolved_gsw
+    if _resolved_gsw is None:
+        if gsw_v15_reachable():
+            last = config.GSW_V15_LAST_YEAR
+            asset = config.GSW_V15_YEARLY
+            logger.info(
+                "water: GSW v1.5 reachable, using %s (%d-%d)", asset, config.GSW_FIRST_YEAR, last
+            )
+        else:
+            last = config.GSW_V14_LAST_YEAR
+            asset = config.GSW_V14_YEARLY
+            logger.info(
+                "water: GSW v1.5 unreachable, falling back to %s (%d-%d)",
+                asset,
+                config.GSW_FIRST_YEAR,
+                last,
+            )
+        _resolved_gsw = (config.GSW_FIRST_YEAR, last, asset)
+    return _resolved_gsw
+
+
 @register
 class WaterDomain(Domain):
     id = "water"
     label = {"en": "Water", "zh": "水體"}
     change_types = ("loss", "gain", "stable")
 
-    def __init__(self) -> None:
-        # Resolved once per instance, on first need, and reused — the probe is a real network
-        # call, and `temporal_range()` and `extract()` must agree on which version they used
-        # without each paying for (or risking a different answer from) a second probe.
-        self._resolved: tuple[int, int, str] | None = None
-
     def _resolve(self) -> tuple[int, int, str]:
         """`(first_year, last_year, asset_id)` actually available, probing v1.5 at most once."""
-        if self._resolved is None:
-            if gsw_v15_reachable():
-                last = config.GSW_V15_LAST_YEAR
-                asset = config.GSW_V15_YEARLY
-                logger.info(
-                    "water: GSW v1.5 reachable, using %s (%d-%d)",
-                    asset,
-                    config.GSW_FIRST_YEAR,
-                    last,
-                )
-            else:
-                last = config.GSW_V14_LAST_YEAR
-                asset = config.GSW_V14_YEARLY
-                logger.info(
-                    "water: GSW v1.5 unreachable, falling back to %s (%d-%d)",
-                    asset,
-                    config.GSW_FIRST_YEAR,
-                    last,
-                )
-            self._resolved = (config.GSW_FIRST_YEAR, last, asset)
-        return self._resolved
+        return _resolve_gsw()
 
     @property
     def source(self) -> SourceInfo:
@@ -265,6 +293,11 @@ class WaterDomain(Domain):
         years = stack.map(tag_year)
         first_year = years.reduce(ee.Reducer.min()).rename("first_year")
         last_year = years.reduce(ee.Reducer.max()).rename("last_year")
+        # `config.GSW_MAPPING_LAYERS` is a v1.4-only asset with no v1.5 counterpart, so a patch
+        # whose water only exists in the v1.5-extension years (2022-2024) still gets a `transition`
+        # class computed from JRC's classification of the 1984-2021 window alone — a window that
+        # doesn't include the years that actually made the patch exist. Not surfaced in `caveat`;
+        # revisit if v1.5 access is ever confirmed and this stops being a theoretical gap.
         transition = (
             ee.Image(config.GSW_MAPPING_LAYERS).select("transition").rename("transition").toInt8()
         )
@@ -334,12 +367,37 @@ class WaterDomain(Domain):
 
         # A water body's pixels do not all start or end in the same year -- a pond that grew
         # outward has older water at its centre than at its edge. `mean` gives each polygon a
-        # representative onset/end year rather than requiring one that does not exist. `transition`
-        # is categorical, so its mean is an approximation of the dominant class, not the class
-        # itself; good enough until a real extraction shows it needs `mode` instead.
-        stats_by_region = stats.reduceRegions(
+        # representative onset/end year rather than requiring one that does not exist. The
+        # tradeoff: a handful of outlier pixels can pull that mean across `derive_change_type`'s
+        # boundary even when most of the patch is not remotely near it -- a reservoir that is 95%
+        # still water at the end of the record but has a thin dried edge some years earlier will
+        # have its mean `last_year` pulled below `range_last` and be classified `loss` outright.
+        # No test exercises this because it needs a real multi-year, spatially-varying pixel
+        # history to construct, which is exactly the kind of case only a live extraction surfaces;
+        # revisit with a threshold-based rule (e.g. loss only once some minimum share of the
+        # patch's area actually stopped being water) if this misclassifies real patches.
+        years_by_region = stats.select(["first_year", "last_year"]).reduceRegions(
             collection=regions,
             reducer=ee.Reducer.mean(),
+            scale=config.NATIVE_SCALE_M,
+        )
+
+        # `transition` is categorical, so `mean` was tried first and rejected -- averaging two
+        # JRC class codes (say 3, "lost permanent", and 7, "seasonal to permanent") can land on a
+        # third code, like 5, "new seasonal", that describes neither pixel actually in the patch.
+        # `mode` reports the class most of the patch's pixels actually carry, which a categorical
+        # code calls for. Reducing `years_by_region` again rather than the original `regions` adds
+        # this property onto the features that already carry first_year/last_year, instead of
+        # recomputing a second, separate collection to merge by hand afterward.
+        #
+        # `setOutputs(["transition"])` is not decoration: `ee.Reducer.mode()` names its output
+        # property after the *reducer* ("mode"), not the band, unlike `mean()` above which happens
+        # to use the band name — found by actually running this and seeing every feature come back
+        # with `transition: None` because the extraction loop was reading a property that was
+        # never written under that name.
+        stats_by_region = stats.select("transition").reduceRegions(
+            collection=years_by_region,
+            reducer=ee.Reducer.mode().setOutputs(["transition"]),
             scale=config.NATIVE_SCALE_M,
         )
 
