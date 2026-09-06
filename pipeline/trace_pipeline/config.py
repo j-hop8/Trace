@@ -30,6 +30,27 @@ GSW_V15_LAST_YEAR: Final[int] = 2024
 GSW_FIRST_YEAR: Final[int] = 1984
 GSW_MAPPING_LAYERS: Final[str] = "JRC/GSW1_4/GlobalSurfaceWater"  # occurrence / transition / change
 
+# Taiwan's land boundary. GSW classes ocean as water, so without this the water domain maps the
+# Taiwan Strait: 12 cell-filling polygons carried 91.3% of the first extract's area, dated `gain`
+# 1988 because that is when Landsat coverage gets dense enough for GSW to call the sea water.
+#
+# LSIB rather than Hansen's `datamask` or GAUL, decided by measurement rather than convenience:
+#
+#   - `datamask` is the tempting one (30 m, already a dependency, same grid) and is wrong. Probed
+#     at known points, open ocean reads 2 and Sun Moon Lake reads 2 -- the same value -- so
+#     masking to `datamask == 1` deletes Taiwan's best-known lake along with the sea.
+#   - GAUL and LSIB both classify every probe point correctly and both match Taiwan's published
+#     36,193 km2 to within 0.1%, but against the real 30,606-feature extract GAUL drops 503
+#     features and keeps 151,047 ha where LSIB drops 226 and keeps 130,821 ha. GAUL loses on both
+#     counts at once: its coarser coastline smooths bays, keeping the sea inside them, while
+#     cutting coastal ponds off headlands.
+#
+# What LSIB still drops is 3 remaining ocean blobs plus small patches a median of 24.9 km
+# offshore, which is sea rather than coastal water.
+TAIWAN_LAND_BOUNDARY: Final[str] = "USDOS/LSIB_SIMPLE/2017"
+TAIWAN_LAND_BOUNDARY_FIELD: Final[str] = "country_na"
+TAIWAN_LAND_BOUNDARY_VALUE: Final[str] = "Taiwan"
+
 # waterClass band values (JRC GSW YearlyHistory)
 WATER_CLASS_NO_DATA: Final[int] = 0
 WATER_CLASS_NOT_WATER: Final[int] = 1

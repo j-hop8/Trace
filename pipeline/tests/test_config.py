@@ -114,3 +114,10 @@ def test_retained_percentage_is_plausible_for_the_threshold():
 def test_every_hue_is_a_hex_colour():
     for domain_id, hue in config.DOMAIN_HUES.items():
         assert hue.startswith("#") and len(hue) == 7, f"{domain_id} hue {hue!r} is not #rrggbb"
+
+
+def test_land_boundary_is_configured_with_the_filter_it_needs():
+    """The id alone is not enough -- the collection is global and has to be filtered to Taiwan."""
+    assert config.TAIWAN_LAND_BOUNDARY
+    assert config.TAIWAN_LAND_BOUNDARY_FIELD
+    assert config.TAIWAN_LAND_BOUNDARY_VALUE == "Taiwan"

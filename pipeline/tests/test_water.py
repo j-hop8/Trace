@@ -6,6 +6,8 @@ either any better than a unit test would. `gsw_v15_reachable` is monkeypatched w
 matters, so these never need real network access or credentials.
 """
 
+import pathlib
+
 import pytest
 
 from trace_pipeline import config, schema
@@ -293,3 +295,29 @@ def test_confidence_is_stated_not_fabricated_per_feature():
         gsw_asset=config.GSW_V14_YEARLY,
     )["properties"]["confidence"]
     assert a == b == water.CONFIDENCE
+
+
+def test_caveat_says_the_layer_is_inland_water_only(monkeypatch):
+    """The sea being absent has to be stated, not left for the reader to infer.
+
+    GSW classes ocean as water, so "surface water near Taiwan" is exactly what a reader would
+    otherwise take this layer to be -- and the honest failure mode of a land clip is that
+    intertidal water reads as *unchanged* rather than as *not measured*.
+    """
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "land boundary" in caveat
+    assert "intertidal" in caveat
+    # And that a patch meeting the coast is cut, so its area is not the whole body's.
+    assert "cut at the boundary" in caveat
+
+
+def test_the_land_boundary_comes_from_config_not_a_literal():
+    """Asset ids live in config.py and nowhere else, so a moved asset is a one-line change."""
+    source = (
+        pathlib.Path(water.__file__).read_text(encoding="utf-8").split('"""', 2)[2]
+    )  # past the module docstring, which cites the id in prose
+
+    assert "USDOS/" not in source
+    assert "config.TAIWAN_LAND_BOUNDARY" in source

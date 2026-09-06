@@ -6,6 +6,13 @@ that needs the domain's range probes it first and falls back to v1.4 alone rathe
 see :func:`gsw_v15_reachable` and :meth:`WaterDomain._resolve`. The range actually obtained is what
 `temporal_range()` reports, never a hardcoded 2024.
 
+**The land mask.** GSW classes ocean as water, and nothing about "was this pixel ever water"
+excludes the sea, so the extraction is restricted to Taiwan's land boundary
+(:func:`taiwan_land`). Without it the domain maps the Taiwan Strait: in the first full run 12
+cell-filling polygons carried 91.3% of all mapped area, each dated `gain` 1988 -- so the layer's
+loudest claim was that the strait appeared that year. `config.TAIWAN_LAND_BOUNDARY` records why
+that dataset and not the two more obvious candidates.
+
 **Per-pixel first/last water year.** JRC's `YearlyHistory` collection is one image per year, each
 pixel classed `WATER_CLASS_NOT_WATER` / `_SEASONAL` / `_PERMANENT` (`config.WATER_CLASS_*`). A
 pixel counts as water in a given year at `_SEASONAL` or above. Stacking every year's water mask,
@@ -71,8 +78,9 @@ WATER_PIXEL_HA = 0.071
 #: northern Taiwan took 53 s for 6,823 features, so this starts at forest's own floor on the
 #: assumption water's heavier per-pixel cost (a 38-year stack reduction plus a `reduceRegions`
 #: join, against forest's single boolean mask) needs at least as fine a grid. The real full run
-#: this shipped with confirms 4 is *sufficient* (30,606 features across 16 cells, one cell alone
-#: carrying 7,599 — already denser than the sampled slice) but not that it is *necessary*; a
+#: this shipped with confirms 4 is *sufficient* (36,721 features across the 15 land-bearing
+#: cells, one alone carrying 7,941 — already denser than the sampled slice) but not that it is
+#: *necessary*; a
 #: pathologically denser cell than any seen so far could still hit the request-too-large failure
 #: forest's own comment documents at 2x2/3x3. Revisit with forest's measure-don't-extrapolate
 #: approach if that ever happens.
@@ -112,6 +120,37 @@ def gsw_v15_reachable() -> bool:
         return True
     except Exception:  # noqa: BLE001 -- unreachable is unreachable, whatever the cause
         return False
+
+
+#: Taiwan's land boundary as one ee.Geometry, built at most once per process.
+_land_geometry: Any | None = None
+
+
+def taiwan_land() -> Any:
+    """Taiwan's land boundary as an ee.Geometry, cached for the life of the process.
+
+    A module-level function for the same reason as :func:`gsw_v15_reachable`: a test can replace
+    it without touching `WaterDomain`. The asset id and its filter field come from `config` and
+    appear nowhere else, so a boundary that moves or is renamed is a one-line change there.
+
+    A *geometry* rather than the FeatureCollection it comes from, because the two clip very
+    differently. `clipToCollection` rasterizes the collection over every tile it touches, and
+    adding that to a 38-year stack reduction was enough to take a cell from working to a
+    server-side HTTP 500. Clipping to the geometry asks Earth Engine for a vector intersection it
+    does natively, and the cost does not scale with the area being read.
+    """
+    import ee
+
+    global _land_geometry
+    if _land_geometry is None:
+        _land_geometry = (
+            ee.FeatureCollection(config.TAIWAN_LAND_BOUNDARY)
+            .filter(
+                ee.Filter.eq(config.TAIWAN_LAND_BOUNDARY_FIELD, config.TAIWAN_LAND_BOUNDARY_VALUE)
+            )
+            .geometry()
+        )
+    return _land_geometry
 
 
 def derive_change_type(first_year: int, last_year: int, range_first: int, range_last: int) -> str:
@@ -240,7 +279,11 @@ class WaterDomain(Domain):
             f"Surface water at {config.NATIVE_SCALE_M} m resolution, {first}-{last}. Isolated "
             f"single pixels (under about {pixel_ha:.2f} ha) are not mapped, so the smallest 埤塘 "
             "(irrigation ponds) may be missed entirely, or merged with a neighbour if they sit "
-            "closer together than one pixel."
+            "closer together than one pixel. Inland water only: the source classes the sea as "
+            "water too, so this is clipped to Taiwan's land boundary. Marine and intertidal "
+            "water — tidal flats, lagoons and fish farms seaward of the coastline — is therefore "
+            "absent rather than measured as unchanged, and a patch meeting the coast is cut at "
+            "the boundary, so its area describes the inland part alone."
         )
 
     def temporal_range(self) -> tuple[int, int]:
@@ -302,14 +345,31 @@ class WaterDomain(Domain):
             ee.Image(config.GSW_MAPPING_LAYERS).select("transition").rename("transition").toInt8()
         )
 
-        return first_year.addBands(last_year).addBands(transition).clip(aoi)
+        # Land before vectorizing, not after. Clipping the polygons afterwards would mean asking
+        # Earth Engine to vectorize the whole Taiwan Strait first and then throwing almost all of
+        # it away: the sea was 91.3% of the unmasked area. Restricting the image is also what
+        # keeps a coastal patch cut at the coastline rather than reaching into the sea.
+        #
+        # Intersected here rather than left to the caller so the guarantee holds for any `aoi`,
+        # including the whole-bbox one `water_stats_image` is public enough to be handed.
+        land = ee.Geometry(aoi).intersection(taiwan_land(), maxError=1)
+
+        return first_year.addBands(last_year).addBands(transition).clip(land)
 
     def grid_cells(self, aoi: Any) -> list[Any]:
-        """`aoi` split into `WATER_GRID` x `WATER_GRID` rectangles, in row-major order.
+        """The land-bearing cells of a `WATER_GRID` x `WATER_GRID` partition, in row-major order.
 
         Same shape as forest's `extent_grid_cells`, over `config.TAIWAN_BBOX` rather than
         whatever `aoi` was passed — the grid is a fixed partition of the island regardless of
         which sub-area extraction is asked for.
+
+        Each cell is intersected with the land boundary, and a cell holding no land at all is
+        dropped rather than requested. That is not only a saving: `Image.clip` refuses an empty
+        geometry outright, so an all-sea cell is a hard failure rather than an empty result once
+        the domain is restricted to land. Several of the sixteen are pure Taiwan Strait.
+
+        The emptiness test costs one round trip for the whole grid rather than one per cell —
+        sixteen `getInfo` calls to decide what not to ask for would undo the saving.
         """
         import ee
 
@@ -328,9 +388,13 @@ class WaterDomain(Domain):
                             west + (col + 1) * width,
                             south + (row + 1) * height,
                         ]
-                    ).intersection(aoi, maxError=1)
+                    )
+                    .intersection(aoi, maxError=1)
+                    .intersection(taiwan_land(), maxError=1)
                 )
-        return cells
+
+        areas = ee.List([cell.area(maxError=1) for cell in cells]).getInfo()
+        return [cell for cell, area in zip(cells, areas, strict=True) if area > 0]
 
     def patches_for_cell(self, cell: Any) -> Any:
         """The ee.FeatureCollection of water patches inside one grid cell, area-tagged."""
@@ -413,10 +477,13 @@ class WaterDomain(Domain):
         first, last, asset = self._resolve()
         features: list[dict[str, Any]] = []
 
-        for index, cell in enumerate(self.grid_cells(aoi), start=1):
+        cells = self.grid_cells(aoi)
+        total_cells = len(cells)
+
+        for index, cell in enumerate(cells, start=1):
             collection = self.patches_for_cell(cell)
             raw = extract.download_features(
-                collection, description=f"water cell {index}/{WATER_GRID**2}"
+                collection, description=f"water cell {index}/{total_cells}"
             )
 
             for item in raw:
@@ -439,7 +506,7 @@ class WaterDomain(Domain):
                 )
 
             print(
-                f"  cell {index}/{WATER_GRID**2}: {len(raw):,} patches "
+                f"  cell {index}/{total_cells}: {len(raw):,} patches "
                 f"(running total {len(features):,})",
                 flush=True,
             )
