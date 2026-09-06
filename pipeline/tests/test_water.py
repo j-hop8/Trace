@@ -127,6 +127,56 @@ def test_an_end_year_cannot_exceed_the_record():
     assert water.derive_valid_to(3, 2025, 2021) == 2021
 
 
+# --- the built-up mask ---------------------------------------------------------------------
+
+
+def test_only_seasonal_grade_classes_are_masked_on_built_up():
+    """The mask must never reach a class involving permanent water at either end: those are real
+    urban lakes and encroached ponds, not building shadow. Measured, 0% of `permanent` pixels sit
+    on built-up ground in any region sampled."""
+    involves_permanent = {1, 2, 3, 7, 8, 9}
+    assert water.MASK_ON_BUILT_UP.isdisjoint(involves_permanent)
+    assert water.MASK_ON_BUILT_UP.issubset(water.GSW_TRANSITION_CLASSES)
+    for code in water.MASK_ON_BUILT_UP:
+        assert "seasonal" in water.GSW_TRANSITION_CLASSES[code]
+
+
+def test_classes_that_ended_are_kept_on_built_up_ground():
+    """A 埤塘 filled in for housing is the most interesting urban water story Taiwan has, and it
+    reads as `lost permanent` / `lost seasonal` sitting on built-up land -- 15% and 12% of those
+    classes do. Masking them would delete the story along with the shadows."""
+    for code in (3, 6):  # lost permanent, lost seasonal
+        assert code not in water.MASK_ON_BUILT_UP
+
+
+def test_ephemeral_seasonal_is_masked_but_ephemeral_permanent_is_not():
+    """`ephemeral` means the water held neither epoch's stable state. Flickering sub-pixel
+    *seasonal* water on built ground is shadow; the permanent-grade counterpart is not."""
+    assert 10 in water.MASK_ON_BUILT_UP
+    assert 9 not in water.MASK_ON_BUILT_UP
+
+
+def test_the_built_up_asset_comes_from_config_not_a_literal():
+    """Asset ids live in config.py and nowhere else, exactly as for the land boundary."""
+    source = pathlib.Path(water.__file__).read_text(encoding="utf-8").split('"""', 2)[2]
+
+    assert "ESA/" not in source
+    assert "config.WORLDCOVER_ASSET" in source
+    assert "config.WORLDCOVER_BUILT_UP" in source
+
+
+def test_caveat_states_the_built_up_rule_and_what_it_costs(monkeypatch):
+    """A deliberate deletion of source data, not a resolution limit -- so the reader is owed the
+    size of the gap, that it is spatial, and that ended water is kept."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "built up" in caveat or "built-up" in caveat
+    assert f"{config.WATER_URBAN_SEASONAL_DROPPED_PCT:.1f}%" in caveat
+    assert "2021 snapshot" in caveat
+    assert "ended" in caveat
+
+
 # --- feature assembly ------------------------------------------------------------------------
 
 
