@@ -13,14 +13,43 @@ cell-filling polygons carried 91.3% of all mapped area, each dated `gain` 1988 -
 loudest claim was that the strait appeared that year. `config.TAIWAN_LAND_BOUNDARY` records why
 that dataset and not the two more obvious candidates.
 
-**Per-pixel first/last water year.** JRC's `YearlyHistory` collection is one image per year, each
-pixel classed `WATER_CLASS_NOT_WATER` / `_SEASONAL` / `_PERMANENT` (`config.WATER_CLASS_*`). A
-pixel counts as water in a given year at `_SEASONAL` or above. Stacking every year's water mask,
-tagging each with its own year, and reducing the stack with `min`/`max` gives the first and last
-year each pixel was observed as water — the same "reduce a per-year stack" shape as forest's
-per-year loop, just resolved as one reduction over the time axis instead of one Earth Engine
-request per year, because there is no per-pixel encoded date to decode here the way Hansen's
-`lossyear` has one.
+**Change comes from JRC, not from us.** The `transition` band of `config.GSW_MAPPING_LAYERS` is
+JRC's own published verdict on how each pixel's water state moved across the record, and
+`CHANGE_TYPE_BY_TRANSITION` maps it onto the B4 `change_type`. An earlier version derived
+`change_type` here instead, from the *mean* per-pixel first/last water year against the ends of the
+range, and it was wrong at scale: every river and drawdown reservoir has ephemeral margin pixels
+that drag that mean under the final year, flipping the whole polygon to `loss`. It put 82.8% of the
+layer's area in `loss` and 1.7% in `stable`; 95.4% of that loss area ended in 2015 or later, and
+52% of it landed on exactly 2020 — one year short of the 2021 cliff, which is what a boundary
+artefact looks like rather than hydrology. 66.0% of the layer was called `loss` while the JRC class
+carried on the very same feature said the water was still there. 淡水河 came back as `loss` with
+`subtype: permanent`. JRC says 6.5% of the area is lost or declining.
+
+**One polygon per transition class, not per blob.** Vectorizing ran off a single uniform "ever
+water" mask, so connectivity alone grouped pixels: 淡水河 + 新店溪 + 大漢溪 + 基隆河 came back as
+one 1,886 ha feature spanning 24 x 21 km, and the largest feature on the map was 30,305 ha over 28 x
+67 km — 23.2% of the layer under one date pair (T-016). `reduceToVectors` segments on its first
+band when that band is integer-valued, so feeding it `transition` gives one feature per contiguous
+same-class region. Each polygon is then homogeneous in class, which is what makes `change_type`
+exact rather than a `mode` over a mixture, and it splits a permanent river core from its
+lost-seasonal margin and the aquaculture belt's ponds from the channels that joined them.
+
+**Why the onset year is mostly not measured.** JRC's `YearlyHistory` is one image per year, each
+pixel classed `WATER_CLASS_*`, and `waterClass == 0` is **No data** — a year GSW could not classify,
+not a year it saw as dry. Taiwan's early record is largely blind. Measured over the pixels GSW
+tracks, the no-data share runs 68.3% in 1984, **100.0% in 1985** (not one usable observation on the
+whole island), 99.5% in 1986 and 89.8% in 1987, collapsing through 1988 (33.5%) and under 1% from
+1994 — with mid-record relapses in 1997 (21.7%), 1998 (65.3%) and 1999 (26.5%). In 1986, 87.2% of
+the pixels that *were* observed were water: the water was there, nothing was looking at it.
+
+So a `min` over the years a pixel was seen as water does not date the water, it dates the
+observation — which is why 石門水庫 (dam 1964) and 曾文水庫 (impounded 1973) came back as arriving
+in the late 1980s, and why only 2.4% of the layer's area dated to 1984 while the mass piled into
+1988-1993. The fix is not a cleverer reduction over a blind record: for the classes JRC already
+asserts were water in its first epoch, `valid_from` is `range_first` and no year is measured at all
+(`PRESENT_AT_START`). Only the arriving classes get a measured onset, and their onsets sit in the
+years the record can actually see. What measurement remains uses `median`, not `mean`, so a dried
+margin cannot drag a whole reservoir across a boundary.
 """
 
 from __future__ import annotations
@@ -33,7 +62,7 @@ from trace_pipeline.domains.base import Domain, SourceInfo, register
 
 logger = logging.getLogger(__name__)
 
-METHOD = "JRC GSW yearly waterClass"
+METHOD = "JRC GSW transition class; onset from yearly waterClass"
 
 #: JRC's own accuracy figures for the yearly water classification are global, not per-pixel or
 #: per-biome, so — same reasoning as Hansen's flat CONFIDENCE in forest.py — one honest flat value
@@ -55,6 +84,41 @@ GSW_TRANSITION_CLASSES: dict[int, str] = {
     9: "ephemeral permanent",
     10: "ephemeral seasonal",
 }
+
+#: JRC transition class -> B4 `change_type`. This is the layer's change signal: the source's own
+#: classification, not a statistic computed here. The schema's enum is
+#: `extent | gain | loss | stable` and is deliberately unchanged, so ten JRC classes fold into
+#: three — `subtype` keeps the exact class for anyone who needs the distinction back.
+#:
+#: The two `ephemeral` classes (appeared *and* went within the record) map to `loss`, preserving
+#: the decision the previous derivation already made and documented: "this is gone" is the more
+#: actionable fact than "this once arrived".
+#:
+#: `permanent to seasonal` is `loss` because there is less water than there was — but it is not an
+#: *ending*, which is why it is absent from `ENDED` below and keeps `valid_to: None`.
+CHANGE_TYPE_BY_TRANSITION: dict[int, str] = {
+    1: "stable",  # permanent
+    2: "gain",  # new permanent
+    3: "loss",  # lost permanent
+    4: "stable",  # seasonal
+    5: "gain",  # new seasonal
+    6: "loss",  # lost seasonal
+    7: "gain",  # seasonal to permanent
+    8: "loss",  # permanent to seasonal
+    9: "loss",  # ephemeral permanent
+    10: "loss",  # ephemeral seasonal
+}
+
+#: Classes whose definition asserts water was already present in JRC's first epoch (1984-1999).
+#: These take `valid_from = range_first` and are never dated by measurement — see the module
+#: docstring on why a `min` over a record that is 100% blind in 1985 dates the observation rather
+#: than the water.
+PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 8})
+
+#: Classes where the water actually stopped, and so are the only ones that get a `valid_to`.
+#: `permanent to seasonal` (8) is pointedly not here: that water declined, it did not end, so its
+#: state is still current.
+ENDED: frozenset[int] = frozenset({3, 6, 9, 10})
 
 #: Minimum mapping unit, in pixels rather than hectares — same reason as forest's
 #: `config.MIN_PATCH_PIXELS`: both sources share `config.NATIVE_SCALE_M`, and a Landsat pixel's
@@ -84,6 +148,12 @@ WATER_PIXEL_HA = 0.071
 #: pathologically denser cell than any seen so far could still hit the request-too-large failure
 #: forest's own comment documents at 2x2/3x3. Revisit with forest's measure-don't-extrapolate
 #: approach if that ever happens.
+#:
+#: Segmenting per transition class rather than per connected blob multiplied the feature count
+#: roughly fourfold — 149,849 across the same 15 cells, with the worst carrying 59,443 against the
+#: previous worst of 7,941 — so this was re-measured rather than assumed to still hold. It does:
+#: that cell downloads in one request. An 8x8 grid was measured too (42 land cells, worst 28,123)
+#: and is the fallback if a future source pushes a cell past what one request can carry.
 #:
 #: The consequence to remember, same as forest's: a water body straddling a cell edge comes back
 #: as two features, so `area_ha` on a patch describes the piece inside its own cell, not the whole
@@ -153,64 +223,100 @@ def taiwan_land() -> Any:
     return _land_geometry
 
 
-def derive_change_type(first_year: int, last_year: int, range_first: int, range_last: int) -> str:
-    """The B4 `change_type` for a patch observed as water from `first_year` to `last_year`.
+class UnknownTransitionClass(ValueError):
+    """A `transition` value outside JRC's documented 1-10.
 
-    Priority is loss, then gain, then stable — not the ticket's listing order, but the order that
-    matches what a reader most needs to know. A pond that both appeared and disappeared within the
-    record (e.g. built, then drained, before the last observed year) is more usefully flagged as a
-    loss than a gain: "this is gone" is the more actionable fact than "this once arrived."
-
-    - `last_year < range_last`: it stopped being water before the record ends — **loss**, whatever
-      happened at the start.
-    - `first_year > range_first`: it was not there at the start but is still water at the end —
-      **gain**.
-    - Otherwise it was water at the start and still is at the end — **stable**.
+    Raised rather than defaulted. Asset versions drift — that is this pipeline's standing gotcha —
+    and a class this module has never seen must be looked at, not silently painted a colour. The
+    extraction is chunked per grid cell, so this surfaces on the first cell rather than after a
+    full run.
     """
-    if last_year < range_last:
-        return "loss"
-    if first_year > range_first:
-        return "gain"
-    return "stable"
+
+
+def derive_change_type(transition_code: int) -> str:
+    """The B4 `change_type` for a patch of JRC transition class `transition_code`.
+
+    A lookup, not a derivation: the source already answered this question across the whole record,
+    with proper handling of the years it could not observe. See `CHANGE_TYPE_BY_TRANSITION` for the
+    mapping and the module docstring for what deriving it here instead cost.
+    """
+    try:
+        return CHANGE_TYPE_BY_TRANSITION[transition_code]
+    except KeyError:
+        raise UnknownTransitionClass(
+            f"transition class {transition_code!r} is not one of JRC's documented 1-10; "
+            f"{config.GSW_MAPPING_LAYERS} may have changed"
+        ) from None
+
+
+def derive_valid_from(transition_code: int, measured_first_year: int, range_first: int) -> int:
+    """The year this patch's water begins, measured only where measuring means anything.
+
+    A class in `PRESENT_AT_START` is one JRC defines as already water in its first epoch, so the
+    honest answer is `range_first` — the record starts with the water already there, and it cannot
+    say when it arrived. Measuring instead is what dated 石門水庫 (dam 1964) to the late 1980s: GSW
+    has no usable observation of Taiwan at all in 1985, so the first year a pixel can be *seen* as
+    water is not the first year it *was* water.
+
+    Arriving classes do get their measured onset, which is sound because their onset is by
+    definition inside the record; it is floored at `range_first` so a median cannot land the
+    feature outside the range the manifest publishes.
+    """
+    if transition_code in PRESENT_AT_START:
+        return range_first
+    return max(measured_first_year, range_first)
+
+
+def derive_valid_to(transition_code: int, measured_last_year: int, range_last: int) -> int | None:
+    """The year this patch's water ends, or `None` if it has not ended.
+
+    Only the `ENDED` classes close. `None` is the B4 convention for a state that is still current,
+    and it is the common case here — including for `permanent to seasonal`, which is `loss` because
+    there is less water than there was, not because the water went away.
+
+    Capped at `range_last`: the record ending is not the state ending, so a median that rounds to
+    the final year would otherwise assert an end the source never observed.
+    """
+    if transition_code not in ENDED:
+        return None
+    return min(measured_last_year, range_last)
 
 
 def build_feature(
     geometry: dict[str, Any],
     *,
+    transition_code: int,
     first_year: int,
     last_year: int,
     range_first: int,
     range_last: int,
     area_ha: float,
     gsw_asset: str,
-    transition_code: int | None = None,
 ) -> dict[str, Any]:
     """Assemble one B4 feature from a vectorized water patch.
 
-    `valid_to` is `None` exactly when the patch is still water in the final observed year — an
-    open-ended feature, same convention as forest's loss/extent — and is otherwise `last_year`,
-    the last year this patch was actually seen as water.
+    `transition_code` is required rather than optional: it is the class the polygon was segmented
+    on, so every patch has exactly one, and it now decides `change_type`, `valid_from` and
+    `valid_to` as well as `subtype`. An absent class is a bug in the extraction, not a feature to
+    emit without a change signal.
+
+    `first_year` / `last_year` are the *measured* medians and are only consulted for the classes
+    that actually need them — see `derive_valid_from` and `derive_valid_to`.
     """
     from trace_pipeline.schema import TraceFeature
 
-    change_type = derive_change_type(first_year, last_year, range_first, range_last)
-    # Derived from `change_type` rather than re-testing `last_year` against `range_last`
-    # independently: `derive_change_type` already answers exactly this question (its `loss`
-    # branch *is* "stopped before the record ends"), and writing the same boundary twice is how
-    # the two could quietly drift apart if that logic's boundary is ever adjusted.
-    valid_to = last_year if change_type == "loss" else None
-    subtype = GSW_TRANSITION_CLASSES.get(transition_code) if transition_code is not None else None
-
     feature = TraceFeature(
         domain=WaterDomain.id,
-        valid_from=first_year,
-        valid_to=valid_to,
-        change_type=change_type,  # type: ignore[arg-type]  -- validated against the schema, not the stale Literal
+        valid_from=derive_valid_from(transition_code, first_year, range_first),
+        valid_to=derive_valid_to(transition_code, last_year, range_last),
+        change_type=derive_change_type(transition_code),  # type: ignore[arg-type]  -- validated against the schema, not the stale Literal
         metric={"area_ha": round(area_ha, 4)},
         source=gsw_asset,
         method=METHOD,
         confidence=CONFIDENCE,
-        subtype=subtype,
+        # Same dict the change signal comes from, so the human-readable class and the colour can
+        # never describe different things.
+        subtype=GSW_TRANSITION_CLASSES[transition_code],
     )
     return feature.to_geojson_feature(geometry)
 
@@ -276,14 +382,30 @@ class WaterDomain(Domain):
         first, last = self.temporal_range()
         pixel_ha = MIN_PATCH_PIXELS * WATER_PIXEL_HA
         return (
-            f"Surface water at {config.NATIVE_SCALE_M} m resolution, {first}-{last}. Isolated "
-            f"single pixels (under about {pixel_ha:.2f} ha) are not mapped, so the smallest 埤塘 "
-            "(irrigation ponds) may be missed entirely, or merged with a neighbour if they sit "
-            "closer together than one pixel. Inland water only: the source classes the sea as "
-            "water too, so this is clipped to Taiwan's land boundary. Marine and intertidal "
-            "water — tidal flats, lagoons and fish farms seaward of the coastline — is therefore "
-            "absent rather than measured as unchanged, and a patch meeting the coast is cut at "
-            "the boundary, so its area describes the inland part alone."
+            f"Surface water at {config.NATIVE_SCALE_M} m resolution, {first}-{last}. Gain, loss "
+            "and stability are JRC's own transition classes, which compare its two epochs over "
+            f"{config.GSW_FIRST_YEAR}-{config.GSW_V14_LAST_YEAR} — so change is measured over that "
+            "window whatever range the extent above covers, and a shape here is one region of a "
+            "single transition class rather than a whole lake or river. A body whose middle stayed "
+            "permanent while its edge dried is two features, not one, and an area figure describes "
+            "the class region, not the body. Loss here is broader than disappearance: it bundles "
+            "water that was only ever ephemeral, seasonal water that went, and permanent water "
+            "that dropped to seasonal but is still present. Permanent water that vanished outright "
+            f"is about {config.WATER_LOST_PERMANENT_PCT:.0f}% of the layer. "
+            f"Isolated single pixels (under about {pixel_ha:.2f} ha) are not mapped, keeping about "
+            f"{config.WATER_RETAINED_PCT:.0f}% of the water area the source records for Taiwan, so "
+            "the smallest 埤塘 (irrigation ponds) may be missed entirely, or merged with a "
+            "neighbour if they sit closer together than one pixel. "
+            "Dates are weaker than the classes. Landsat barely covered Taiwan early on — the "
+            "source has no usable observation of the island at all in 1985, and little before "
+            f"1988 — so water already present when the record opens is dated {first} because that "
+            "is when watching began, not when the water arrived, and an arrival dated before about "
+            "1988 may equally be the year the view cleared. "
+            "Inland water only: the source classes the sea as water too, so this is clipped to "
+            "Taiwan's land boundary. Marine and intertidal water — tidal flats, lagoons and fish "
+            "farms seaward of the coastline — is therefore absent rather than measured as "
+            "unchanged, and a patch meeting the coast is cut at the boundary, so its area "
+            "describes the inland part alone."
         )
 
     def temporal_range(self) -> tuple[int, int]:
@@ -316,13 +438,17 @@ class WaterDomain(Domain):
         return v14.merge(extension)
 
     def water_stats_image(self, aoi: Any) -> Any:
-        """The 3-band ee.Image of `first_year` / `last_year` / `transition`, clipped to `aoi`.
+        """The 3-band ee.Image of `transition` / `first_year` / `last_year`, clipped to `aoi`.
 
-        Each year's image is masked to where it was observed as water and tagged with its own
-        year; reducing the masked stack with `min`/`max` gives, per pixel, the first and last year
-        it was seen as water. A pixel never observed as water has no contributing image at all and
-        reduces to fully masked, which is what makes `first_year`'s own mask the "was this ever
-        water" mask vectorizing runs against.
+        **`transition` is band 0 and that is load-bearing**: `reduceToVectors` segments on its
+        first band when that band is integer-valued, and segmenting on the class is what gives one
+        polygon per transition class instead of one blob per connected mass. `toInt8` keeps it
+        integer-typed for that.
+
+        The year bands are the *measured* onset and end, and most features never use them — see
+        `derive_valid_from`. Each year's image is masked to where it was observed as water and
+        tagged with its own year, so `min`/`max` over the stack give the first and last year each
+        pixel was *seen* as water.
         """
         import ee
 
@@ -330,6 +456,11 @@ class WaterDomain(Domain):
 
         def tag_year(image: Any) -> Any:
             year = ee.Image.constant(image.get("year")).toInt16()
+            # `waterClass == config.WATER_CLASS_NO_DATA` is *No data*, not dry, and `gte(SEASONAL)`
+            # already excludes it here. Worth stating because that exclusion is the subtle half of
+            # the problem rather than the fix for it: a blind year does not inject a false water
+            # year, it silently pushes `min` later, and Taiwan's record is 100% blind in 1985. The
+            # consequence is handled where it can be — `derive_valid_from` — not here.
             was_water = image.select("waterClass").gte(config.WATER_CLASS_SEASONAL)
             return year.updateMask(was_water).rename("year")
 
@@ -338,9 +469,9 @@ class WaterDomain(Domain):
         last_year = years.reduce(ee.Reducer.max()).rename("last_year")
         # `config.GSW_MAPPING_LAYERS` is a v1.4-only asset with no v1.5 counterpart, so a patch
         # whose water only exists in the v1.5-extension years (2022-2024) still gets a `transition`
-        # class computed from JRC's classification of the 1984-2021 window alone — a window that
-        # doesn't include the years that actually made the patch exist. Not surfaced in `caveat`;
-        # revisit if v1.5 access is ever confirmed and this stops being a theoretical gap.
+        # class computed from JRC's classification of the 1984-2021 window alone. This used to be a
+        # decorative gap affecting `subtype`; now that the same band decides `change_type`, it is
+        # load-bearing, so `caveat` states the change window explicitly and unconditionally.
         transition = (
             ee.Image(config.GSW_MAPPING_LAYERS).select("transition").rename("transition").toInt8()
         )
@@ -354,7 +485,7 @@ class WaterDomain(Domain):
         # including the whole-bbox one `water_stats_image` is public enough to be handed.
         land = ee.Geometry(aoi).intersection(taiwan_land(), maxError=1)
 
-        return first_year.addBands(last_year).addBands(transition).clip(land)
+        return transition.addBands(first_year).addBands(last_year).clip(land)
 
     def grid_cells(self, aoi: Any) -> list[Any]:
         """The land-bearing cells of a `WATER_GRID` x `WATER_GRID` partition, in row-major order.
@@ -401,75 +532,47 @@ class WaterDomain(Domain):
         import ee
 
         stats = self.water_stats_image(cell)
-        # `.mask()` reads back the mask *channel* as data, which comes back floating-point --
-        # `connectedPixelCount` refuses that outright ("Segment size calculation on floating point
-        # bands is not supported"), found by actually running this against Earth Engine. A boolean
-        # comparison keeps the source pixels' mask (still masked outside ever-water) but its own
-        # result is a real integer type, and `selfMask` then collapses it to one uniform class so
-        # vectorizing groups by connectivity alone, not by the varying first_year value underneath.
-        ever_water = stats.select("first_year").gt(0).selfMask()
 
-        # Vectorized from the boolean mask alone, exactly like forest's loss/extent passes — the
-        # geometry a component gets does not depend on what its pixels' first/last year happen to
-        # be, only on which pixels were ever water and how they connect.
-        component_size = ever_water.connectedPixelCount(maxSize=16, eightConnected=False)
-        kept = ever_water.updateMask(component_size.gte(MIN_PATCH_PIXELS))
+        # Segment on the class, not on a uniform "ever water" blob. `selfMask` drops transition
+        # class 0 ("no change"), which is every not-water pixel on the island and would otherwise
+        # vectorize as one enormous region.
+        classed = stats.select("transition").selfMask()
 
+        # `connectedPixelCount` counts *same-valued* connected neighbours, so on a multi-valued
+        # band it is already the per-class segment size — the same MMU sieve as before, now applied
+        # to the region that actually becomes a feature rather than to the merged blob around it.
+        component_size = classed.connectedPixelCount(maxSize=16, eightConnected=False)
+        kept = classed.updateMask(component_size.gte(MIN_PATCH_PIXELS))
+
+        # One call replaces the old vectorize + two `reduceRegions`. The first band (`transition`,
+        # integer) defines the regions and lands on each feature as `labelProperty`; the reducer
+        # runs over the remaining bands, giving each region its own median onset/end year.
+        #
+        # `median`, not `mean`: a mean over a patch is pulled by its dried margins, which is what
+        # put 82.8% of this layer's area in `loss` (module docstring). A median answers "the year
+        # half of this patch was water", which is the statistic that survives an outlier edge.
+        #
         # `scale` rather than the reduced image's own `.projection()`: reducing over an
         # ImageCollection with `.reduce()` does not carry forward a concrete grid the way a single
         # loaded asset band's native projection does, so `crs=<that projection>` alone reaches
         # Earth Engine with no resolvable scale attached ("You must specify a scale or crsTransform
         # when specifying a crs"), found by actually running this. Both sources are natively
         # `config.NATIVE_SCALE_M`, so stating it directly sidesteps relying on that propagation.
-        regions = kept.reduceToVectors(
+        regions = kept.addBands(stats.select(["first_year", "last_year"])).reduceToVectors(
+            reducer=ee.Reducer.median(),
             geometry=cell,
             scale=config.NATIVE_SCALE_M,
             geometryType="polygon",
             eightConnected=False,
+            labelProperty="transition",
             maxPixels=int(1e10),
-        )
-
-        # A water body's pixels do not all start or end in the same year -- a pond that grew
-        # outward has older water at its centre than at its edge. `mean` gives each polygon a
-        # representative onset/end year rather than requiring one that does not exist. The
-        # tradeoff: a handful of outlier pixels can pull that mean across `derive_change_type`'s
-        # boundary even when most of the patch is not remotely near it -- a reservoir that is 95%
-        # still water at the end of the record but has a thin dried edge some years earlier will
-        # have its mean `last_year` pulled below `range_last` and be classified `loss` outright.
-        # No test exercises this because it needs a real multi-year, spatially-varying pixel
-        # history to construct, which is exactly the kind of case only a live extraction surfaces;
-        # revisit with a threshold-based rule (e.g. loss only once some minimum share of the
-        # patch's area actually stopped being water) if this misclassifies real patches.
-        years_by_region = stats.select(["first_year", "last_year"]).reduceRegions(
-            collection=regions,
-            reducer=ee.Reducer.mean(),
-            scale=config.NATIVE_SCALE_M,
-        )
-
-        # `transition` is categorical, so `mean` was tried first and rejected -- averaging two
-        # JRC class codes (say 3, "lost permanent", and 7, "seasonal to permanent") can land on a
-        # third code, like 5, "new seasonal", that describes neither pixel actually in the patch.
-        # `mode` reports the class most of the patch's pixels actually carry, which a categorical
-        # code calls for. Reducing `years_by_region` again rather than the original `regions` adds
-        # this property onto the features that already carry first_year/last_year, instead of
-        # recomputing a second, separate collection to merge by hand afterward.
-        #
-        # `setOutputs(["transition"])` is not decoration: `ee.Reducer.mode()` names its output
-        # property after the *reducer* ("mode"), not the band, unlike `mean()` above which happens
-        # to use the band name — found by actually running this and seeing every feature come back
-        # with `transition: None` because the extraction loop was reading a property that was
-        # never written under that name.
-        stats_by_region = stats.select("transition").reduceRegions(
-            collection=years_by_region,
-            reducer=ee.Reducer.mode().setOutputs(["transition"]),
-            scale=config.NATIVE_SCALE_M,
         )
 
         def tag_area(feature: Any) -> Any:
             area_ha = feature.geometry().area(maxError=1).divide(config.M2_PER_HA)
             return feature.set("area_ha", area_ha)
 
-        return stats_by_region.map(tag_area)
+        return regions.map(tag_area)
 
     def extract(self, aoi: Any) -> dict[str, Any]:
         from trace_pipeline import extract
@@ -479,6 +582,12 @@ class WaterDomain(Domain):
 
         cells = self.grid_cells(aoi)
         total_cells = len(cells)
+        # A region whose class needs a measured year but whose yearly stack never saw water there
+        # — the two JRC products (aggregate `transition` vs `YearlyHistory`) disagreeing on that
+        # pixel. Skipped rather than dated from `range_first`, which would assert the water was
+        # present from the start of the record, and counted rather than swallowed so the run says
+        # how much it dropped.
+        undatable = 0
 
         for index, cell in enumerate(cells, start=1):
             collection = self.patches_for_cell(cell)
@@ -488,20 +597,31 @@ class WaterDomain(Domain):
 
             for item in raw:
                 props = item["properties"]
+                transition_code = round(props["transition"])
+                measured_first = props.get("first_year")
+                measured_last = props.get("last_year")
+
+                needs_onset = transition_code not in PRESENT_AT_START
+                needs_end = transition_code in ENDED
+                if (needs_onset and measured_first is None) or (
+                    needs_end and measured_last is None
+                ):
+                    undatable += 1
+                    continue
+
                 features.append(
                     build_feature(
                         geometry=item["geometry"],
-                        first_year=round(props["first_year"]),
-                        last_year=round(props["last_year"]),
+                        transition_code=transition_code,
+                        # Only consulted for the classes that need them; `range_first`/`range_last`
+                        # stand in where the class makes the measurement irrelevant, so a masked
+                        # median never reaches the schema as a fabricated year.
+                        first_year=round(measured_first) if measured_first is not None else first,
+                        last_year=round(measured_last) if measured_last is not None else last,
                         range_first=first,
                         range_last=last,
                         area_ha=props["area_ha"],
                         gsw_asset=asset,
-                        transition_code=(
-                            round(props["transition"])
-                            if props.get("transition") is not None
-                            else None
-                        ),
                     )
                 )
 
@@ -511,5 +631,11 @@ class WaterDomain(Domain):
                 flush=True,
             )
 
+        if undatable:
+            print(
+                f"  {undatable:,} patches skipped: class needs a measured year the yearly "
+                f"stack does not have",
+                flush=True,
+            )
         print(f"  {len(features):,} water patches, GSW {asset}", flush=True)
         return {"type": "FeatureCollection", "features": features}

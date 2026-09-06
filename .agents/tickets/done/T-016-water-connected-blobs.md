@@ -51,3 +51,7 @@ should be separate coming back as one — and it is the larger of the two.
 
 **Verify:** `cd pipeline && pytest && ruff check .`
 **Owner:** unassigned — human to triage
+
+**Superseded by T-017**, which splits features per JRC transition class — that segmentation is
+the split this ticket asked for, and it was done together with the change_type fix because a
+correct class on a 67 km blob is still a wrong answer.

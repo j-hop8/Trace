@@ -111,6 +111,35 @@ FOREST_RETAINED_PCT: Final[float] = 90.3
 # the loss number for the extent layer would understate the extent layer's completeness by 10 pp.
 FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 
+# Share of the water area JRC records for Taiwan that survives MIN_PATCH_PIXELS, measured on the
+# ever-water raster (transition >= 1) clipped to TAIWAN_LAND_BOUNDARY: components of at least
+# MIN_PATCH_PIXELS same-class pixels, against every classed pixel.
+#
+# Measured per class region, not per water body, because that is what a feature now is: water.py
+# segments on JRC's transition class, so the sieve applies to the class region and a large lake
+# with a two-pixel fringe of a different class loses the fringe, not the lake.
+#
+# 118,952 of 134,600 ha. The first guess at this comment predicted a figure near
+# FOREST_EXTENT_RETAINED_PCT's 99.8%, reasoning that water is one near-continuous mass rather than
+# forest loss's scattered patches. Measuring says otherwise, and the reason is the segmentation
+# itself: splitting on transition class turns every lake's seasonal fringe into its own thin region,
+# so the sieve bites roughly as hard here as it does on forest loss. Sizing this by intuition would
+# have overstated completeness by 11 points in a line quoted to users.
+#
+# Re-measure whenever MIN_PATCH_PIXELS or the segmentation changes -- it is quoted to users.
+WATER_RETAINED_PCT: Final[float] = 88.4
+
+# Share of the water layer's area that is permanent water which disappeared outright -- JRC's
+# `lost permanent` class alone, 3,547 of 117,204 ha.
+#
+# Quoted because `loss` paints about a third of this layer red, and a third of Taiwan's water did
+# not vanish. That red bundles four different JRC classes: water that was only ever ephemeral
+# (11.0% of the layer), seasonal water that went (9.4%), permanent water that dropped to seasonal
+# but is still there (8.5%), and only then permanent water that actually went. Stating the
+# threshold without this composition would let a reader take the whole third as disappearance --
+# the same failure mode the forest caveat's retained-percentage rule exists to prevent.
+WATER_LOST_PERMANENT_PCT: Final[float] = 3.0
+
 M2_PER_HA: Final[float] = 10_000.0
 
 # --- Output -----------------------------------------------------------------------------------

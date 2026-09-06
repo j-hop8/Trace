@@ -33,129 +33,179 @@ SQUARE = {
 # --- change_type derivation ------------------------------------------------------------------
 
 
-def test_a_patch_still_water_at_the_end_is_stable():
-    assert water.derive_change_type(1984, 2021, 1984, 2021) == "stable"
+def test_every_documented_jrc_class_has_a_change_type():
+    """No class may fall through to a default -- a missing entry would paint the map a colour
+    nobody chose. `GSW_TRANSITION_CLASSES` is the roster, so the two dicts must agree exactly."""
+    assert set(water.CHANGE_TYPE_BY_TRANSITION) == set(water.GSW_TRANSITION_CLASSES)
 
 
-def test_a_patch_that_stopped_before_the_end_is_loss():
-    assert water.derive_change_type(1984, 2015, 1984, 2021) == "loss"
+def test_change_types_are_all_in_the_schema_enum():
+    allowed = {"extent", "gain", "loss", "stable"}
+    assert set(water.CHANGE_TYPE_BY_TRANSITION.values()) <= allowed
 
 
-def test_a_patch_that_appeared_after_the_start_and_stayed_is_gain():
-    assert water.derive_change_type(2005, 2021, 1984, 2021) == "gain"
+def test_persisting_classes_are_stable():
+    assert water.derive_change_type(1) == "stable"  # permanent
+    assert water.derive_change_type(4) == "stable"  # seasonal
 
 
-def test_appeared_and_then_disappeared_is_loss_not_gain():
-    """Loss takes priority: "this is gone" is more actionable than "this once arrived"."""
-    assert water.derive_change_type(2005, 2015, 1984, 2021) == "loss"
+def test_arriving_classes_are_gain():
+    for code in (2, 5, 7):  # new permanent, new seasonal, seasonal to permanent
+        assert water.derive_change_type(code) == "gain"
 
 
-def test_a_single_year_patch_within_the_range_is_loss():
-    assert water.derive_change_type(2010, 2010, 1984, 2021) == "loss"
+def test_departing_and_declining_classes_are_loss():
+    for code in (3, 6, 8):  # lost permanent, lost seasonal, permanent to seasonal
+        assert water.derive_change_type(code) == "loss"
+
+
+def test_ephemeral_is_loss_not_gain():
+    """Preserves the earlier derivation's decision: a patch that both arrived and went is more
+    usefully flagged "this is gone" than "this once arrived"."""
+    assert water.derive_change_type(9) == "loss"  # ephemeral permanent
+    assert water.derive_change_type(10) == "loss"  # ephemeral seasonal
+
+
+def test_the_river_case_that_prompted_this_is_not_loss():
+    """淡水河 came back `change_type: loss` carrying `subtype: permanent` on the same feature --
+    the layer contradicting its own source. JRC's class is now the only vote."""
+    assert water.derive_change_type(1) == "stable"
+
+
+def test_an_unknown_class_raises_rather_than_defaulting():
+    """Asset versions drift (config.py's standing gotcha). A class this module has never seen must
+    be looked at, not silently given a colour."""
+    with pytest.raises(water.UnknownTransitionClass):
+        water.derive_change_type(11)
+    with pytest.raises(water.UnknownTransitionClass):
+        water.derive_change_type(0)
+
+
+# --- valid_from / valid_to derivation ---------------------------------------------------------
+
+
+def test_classes_present_at_the_start_are_dated_to_the_record_not_measured():
+    """The bug that dated 石門水庫 (dam 1964) and 曾文水庫 (1973) to the late 1980s: GSW has no
+    usable observation of Taiwan in 1985, so a measured onset dates the observation, not the
+    water. For a class JRC defines as already-water in epoch 1, the measurement is ignored."""
+    for code in (1, 3, 4, 6, 8):
+        assert water.derive_valid_from(code, 1988, 1984) == 1984
+
+
+def test_arriving_classes_keep_their_measured_onset():
+    """翡翠水庫's dam finished in 1987 -- the control proving the fix does not simply flatten
+    every date to the start of the record."""
+    assert water.derive_valid_from(2, 1988, 1984) == 1988
+    assert water.derive_valid_from(5, 2016, 1984) == 2016
+
+
+def test_a_measured_onset_cannot_fall_outside_the_published_range():
+    assert water.derive_valid_from(2, 1979, 1984) == 1984
+
+
+def test_only_ended_classes_close():
+    assert water.derive_valid_to(3, 2015, 2021) == 2015  # lost permanent
+    assert water.derive_valid_to(6, 2015, 2021) == 2015  # lost seasonal
+    assert water.derive_valid_to(9, 2015, 2021) == 2015  # ephemeral permanent
+    assert water.derive_valid_to(10, 2015, 2021) == 2015  # ephemeral seasonal
+
+
+def test_persisting_classes_stay_open_ended():
+    for code in (1, 2, 4, 5, 7):
+        assert water.derive_valid_to(code, 2015, 2021) is None
+
+
+def test_declining_water_is_loss_but_has_not_ended():
+    """`permanent to seasonal` is less water than there was, which is a loss -- but the water is
+    still there, so the state is current and the feature stays open-ended."""
+    assert water.derive_change_type(8) == "loss"
+    assert water.derive_valid_to(8, 2015, 2021) is None
+
+
+def test_an_end_year_cannot_exceed_the_record():
+    """The record stopping is not the state stopping."""
+    assert water.derive_valid_to(3, 2025, 2021) == 2021
 
 
 # --- feature assembly ------------------------------------------------------------------------
 
 
+def build(transition_code, **overrides):
+    """A feature with the boring defaults filled in, so each test states only what it is about."""
+    kwargs = {
+        "transition_code": transition_code,
+        "first_year": 1984,
+        "last_year": 2021,
+        "range_first": 1984,
+        "range_last": 2021,
+        "area_ha": 1.2,
+        "gsw_asset": config.GSW_V14_YEARLY,
+    }
+    kwargs.update(overrides)
+    return water.build_feature(SQUARE, **kwargs)
+
+
 def test_built_feature_satisfies_the_b4_contract():
-    feature = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2021,
-        range_first=1984,
-        range_last=2021,
-        area_ha=1.2,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )
-    schema.validate(schema.feature_collection([feature]))
+    schema.validate(schema.feature_collection([build(1)]))
+
+
+def test_every_class_produces_a_schema_valid_feature():
+    """Each of the ten classes now drives change_type, valid_from and valid_to, so each is its own
+    path to the schema rather than a decorative label."""
+    features = [
+        build(code, first_year=1995, last_year=2015) for code in water.GSW_TRANSITION_CLASSES
+    ]
+    schema.validate(schema.feature_collection(features))
 
 
 def test_built_feature_carries_the_expected_spine_values():
-    props = water.build_feature(
-        SQUARE,
-        first_year=2005,
-        last_year=2015,
-        range_first=1984,
-        range_last=2021,
-        area_ha=0.34,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )["properties"]
+    props = build(6, first_year=1995, last_year=2015)["properties"]  # lost seasonal
 
     assert props["domain"] == "water"
-    assert props["valid_from"] == 2005
+    assert props["valid_from"] == 1984  # class 6 was water in epoch 1, so not measured
     assert props["valid_to"] == 2015
     assert props["change_type"] == "loss"
-    assert props["metric"]["area_ha"] == 0.34
+    assert props["subtype"] == "lost seasonal"
+    assert props["metric"]["area_ha"] == 1.2
     assert props["source"] == config.GSW_V14_YEARLY
     assert props["method"] == water.METHOD
 
 
+def test_a_new_body_carries_its_measured_onset_and_stays_open():
+    props = build(2, first_year=1988, last_year=2021)["properties"]  # new permanent
+    assert props["valid_from"] == 1988
+    assert props["valid_to"] is None
+    assert props["change_type"] == "gain"
+
+
 def test_still_water_at_the_end_is_open_ended():
     """The final observed year is not an end date -- the record simply stops there."""
-    props = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2021,
-        range_first=1984,
-        range_last=2021,
-        area_ha=5.0,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )["properties"]
+    props = build(1)["properties"]  # permanent
     assert props["valid_to"] is None
     assert props["change_type"] == "stable"
 
 
 def test_transition_code_becomes_the_named_subtype():
-    props = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2015,
-        range_first=1984,
-        range_last=2021,
-        area_ha=0.5,
-        gsw_asset=config.GSW_V14_YEARLY,
-        transition_code=3,
-    )["properties"]
-    assert props["subtype"] == water.GSW_TRANSITION_CLASSES[3]
+    assert build(3)["properties"]["subtype"] == water.GSW_TRANSITION_CLASSES[3]
 
 
-def test_an_unrecognised_transition_code_omits_subtype_rather_than_guessing():
-    props = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2021,
-        range_first=1984,
-        range_last=2021,
-        area_ha=0.5,
-        gsw_asset=config.GSW_V14_YEARLY,
-        transition_code=99,
-    )["properties"]
-    assert "subtype" not in props
+def test_subtype_and_change_type_can_never_disagree():
+    """The failure that prompted this work: 淡水河 shipped `subtype: permanent` alongside
+    `change_type: loss`. Both now come from the same class, so a feature JRC calls permanent
+    cannot also be painted as gone."""
+    for code, name in water.GSW_TRANSITION_CLASSES.items():
+        props = build(code, first_year=1995, last_year=2015)["properties"]
+        assert props["subtype"] == name
+        assert props["change_type"] == water.CHANGE_TYPE_BY_TRANSITION[code]
 
 
-def test_no_transition_code_omits_subtype():
-    props = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2021,
-        range_first=1984,
-        range_last=2021,
-        area_ha=0.5,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )["properties"]
-    assert "subtype" not in props
+def test_an_unrecognised_transition_code_raises_rather_than_guessing():
+    with pytest.raises((water.UnknownTransitionClass, KeyError)):
+        build(99)
 
 
 def test_area_is_rounded_but_not_to_zero():
-    props = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2021,
-        range_first=1984,
-        range_last=2021,
-        area_ha=0.5000004,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )["properties"]
+    props = build(1, area_ha=0.5000004)["properties"]
     assert props["metric"]["area_ha"] == pytest.approx(0.5, abs=1e-4)
     assert props["metric"]["area_ha"] > 0
 
@@ -163,15 +213,8 @@ def test_area_is_rounded_but_not_to_zero():
 def test_building_a_feature_with_an_impossible_year_fails():
     """build_feature goes through TraceFeature, so the schema bounds apply here too."""
     with pytest.raises(schema.FeatureValidationError):
-        water.build_feature(
-            SQUARE,
-            first_year=1200,
-            last_year=2021,
-            range_first=1984,
-            range_last=2021,
-            area_ha=1.0,
-            gsw_asset=config.GSW_V14_YEARLY,
-        )
+        # class 2 is measured rather than dated to the record, so a bad year reaches the schema
+        build(2, first_year=1200, range_first=1200)
 
 
 # --- the version probe -----------------------------------------------------------------------
@@ -254,6 +297,42 @@ def test_caveat_states_the_resolution_floor(monkeypatch):
     assert str(config.NATIVE_SCALE_M) in caveat
 
 
+def test_caveat_states_the_change_window_not_just_the_extent_range(monkeypatch):
+    """`transition` is a v1.4-only band covering 1984-2021. It now decides change_type, so if v1.5
+    ever resolves, extent would run to 2024 while change still stops at 2021. The caveat has to say
+    so unconditionally rather than leaving the reader to assume one range covers both."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: True)
+    caveat = water.WaterDomain().caveat
+
+    assert str(config.GSW_V14_LAST_YEAR) in caveat
+    assert "transition" in caveat
+
+
+def test_caveat_states_what_a_feature_now_is(monkeypatch):
+    """Features are regions of one transition class, so an area figure is not a water body's
+    area -- T-016's acceptance criterion."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    assert "transition class" in water.WaterDomain().caveat
+
+
+def test_caveat_states_the_retained_percentage_not_just_the_threshold(monkeypatch):
+    """The honesty rule: "patches under X ha are not mapped" sounds negligible; the retained share
+    is the fact a reader needs."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    assert f"{config.WATER_RETAINED_PCT:.0f}%" in water.WaterDomain().caveat
+
+
+def test_caveat_admits_the_early_record_is_blind(monkeypatch):
+    """GSW has no usable observation of Taiwan in 1985 and little before 1988, so a start date is
+    when watching began rather than when the water arrived. That is the artefact that prompted this
+    work, and it cannot be fixed -- only stated."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "1985" in caveat
+    assert "1988" in caveat
+
+
 def test_caveat_names_small_ponds_by_their_local_name(monkeypatch):
     """A5: the caveat has to say what this layer cannot tell you, specifically enough to act on."""
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
@@ -276,24 +355,8 @@ def test_manifest_entry_is_well_formed(monkeypatch):
 def test_confidence_is_stated_not_fabricated_per_feature():
     """JRC publishes global accuracy figures, not per-pixel ones -- one honest flat value."""
     assert 0 < water.CONFIDENCE < 1
-    a = water.build_feature(
-        SQUARE,
-        first_year=1984,
-        last_year=2021,
-        range_first=1984,
-        range_last=2021,
-        area_ha=1.0,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )["properties"]["confidence"]
-    b = water.build_feature(
-        SQUARE,
-        first_year=1990,
-        last_year=2000,
-        range_first=1984,
-        range_last=2021,
-        area_ha=9.0,
-        gsw_asset=config.GSW_V14_YEARLY,
-    )["properties"]["confidence"]
+    a = build(1, area_ha=1.0)["properties"]["confidence"]
+    b = build(6, first_year=1990, last_year=2000, area_ha=9.0)["properties"]["confidence"]
     assert a == b == water.CONFIDENCE
 
 
@@ -321,3 +384,15 @@ def test_the_land_boundary_comes_from_config_not_a_literal():
 
     assert "USDOS/" not in source
     assert "config.TAIWAN_LAND_BOUNDARY" in source
+
+
+def test_caveat_says_what_loss_bundles(monkeypatch):
+    """Loss paints about a third of this layer red, and a third of Taiwan's water did not vanish:
+    the class bundles ephemeral water, gone seasonal water, and permanent water that merely dropped
+    to seasonal. The share that actually disappeared has to be stated, for the same reason the
+    forest caveat states a retained percentage rather than only a threshold."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "ephemeral" in caveat
+    assert f"{config.WATER_LOST_PERMANENT_PCT:.0f}%" in caveat
