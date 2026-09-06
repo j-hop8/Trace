@@ -132,6 +132,11 @@ PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 7, 8})
 #: Classes where the water actually stopped, and so are the only ones that get a `valid_to`.
 #: `permanent to seasonal` (8) is pointedly not here: that water declined, it did not end, so its
 #: state is still current.
+#:
+#: Derived from JRC's own naming rather than hand-listed, for the same reason as
+#: `PRESENT_AT_START` above — a class ended iff it was `lost ...` (held its state through epoch 1
+#: and was gone by epoch 2) or `ephemeral ...` (came and went inside the record) — and a test
+#: enforces that. This membership is correct today; hand-keeping it is how it would stop being.
 ENDED: frozenset[int] = frozenset({3, 6, 9, 10})
 
 #: Classes dropped where `config.WORLDCOVER_MANAGED_CLASSES` says the ground is built on or farmed

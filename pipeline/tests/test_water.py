@@ -137,6 +137,30 @@ def test_only_ended_classes_close():
     assert water.derive_valid_to(10, 2015, 2021) == 2015  # ephemeral seasonal
 
 
+def test_ended_follows_jrcs_class_names_rather_than_a_hand_kept_list():
+    """Same structural guard as `PRESENT_AT_START`'s, and here for the same reason: every other
+    test of `ENDED` hand-lists codes, so the constant and its checks would be one hand-kept list
+    wearing two hats -- exactly how class 7 went missing from `PRESENT_AT_START`.
+
+    JRC's naming is the rule and is checkable: a class ended iff it was `lost ...` (held its state
+    through epoch 1 and was gone by epoch 2) or `ephemeral ...` (came and went inside the record).
+    """
+    for code, name in water.GSW_TRANSITION_CLASSES.items():
+        ended = name.startswith("lost ") or name.startswith("ephemeral ")
+        assert (code in water.ENDED) is ended, (
+            f"class {code} ({name}) is on the wrong side of ENDED"
+        )
+
+
+def test_the_rule_for_ended_does_not_swallow_merely_declining_water():
+    """The case the derivation has to get right, and the one a looser rule -- `change_type is
+    loss` -- would get wrong: `permanent to seasonal` is a `loss` that is not an ending."""
+    losses = {c for c, ct in water.CHANGE_TYPE_BY_TRANSITION.items() if ct == "loss"}
+    assert 8 in losses
+    assert 8 not in water.ENDED
+    assert water.ENDED.issubset(losses)  # ...but every ending is still a loss
+
+
 def test_persisting_classes_stay_open_ended():
     for code in (1, 2, 4, 5, 7):
         assert water.derive_valid_to(code, 2015, 2021) is None
