@@ -2,8 +2,9 @@
 
 import pytest
 
+import trace_pipeline.domains as domains
 from trace_pipeline import config
-from trace_pipeline.domains import base
+from trace_pipeline.domains import base, water
 
 
 @pytest.fixture
@@ -35,6 +36,34 @@ def fake_domain_cls():
             return {"type": "FeatureCollection", "features": []}
 
     return FakeWater
+
+
+#: Markup that renders as literal punctuation. `web/src/components/Attribution.tsx` puts the
+#: caveat on the page as `{entry.caveat}` -- a text node, deliberately: the string comes from the
+#: pipeline and interpreting it as markup would mean either a parser or `dangerouslySetInnerHTML`
+#: for the sake of one emphasised word. So the contract is that a caveat is plain prose, and it is
+#: enforced on the side that can be enforced.
+_MARKUP = ("*", "`", "](")
+
+
+@pytest.mark.parametrize("domain_id", domains.all_ids())
+def test_caveat_is_plain_prose_not_markup(domain_id, monkeypatch):
+    """Water's caveat shipped `*ended*` and readers saw the asterisks.
+
+    Emphasis was the right instinct -- "Water the source says ended is kept there" is hard to
+    parse without it -- but the fix is prose that does not need emphasis ("says has ended"), not
+    markup in a field nothing parses. Every domain, so the next caveat cannot reintroduce it.
+    """
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    monkeypatch.setattr(water, "_resolved_gsw", None)
+
+    caveat = domains.get(domain_id).caveat
+
+    for token in _MARKUP:
+        assert token not in caveat, (
+            f"{domain_id}'s caveat contains {token!r}; Attribution.tsx renders it as text, so the "
+            f"reader sees the character. Rewrite the sentence instead."
+        )
 
 
 def test_domain_cannot_be_instantiated_without_implementing_the_contract():

@@ -507,6 +507,53 @@ def test_caveat_admits_the_early_record_is_blind(monkeypatch):
     assert "1988" in caveat
 
 
+def test_caveat_separates_when_the_water_was_there_from_when_it_went(monkeypatch):
+    """The timeline's first frame paints most of this layer's loss at once, and a reader takes
+    that for an event.
+
+    Three true things compose into a false one: JRC's class is a single verdict over the whole
+    record, `PRESENT_AT_START` dates the classes that held water in epoch 1 to the record's start
+    (correctly -- see the tests above), and the web app's cohorts switch a feature on at
+    `valid_from` and accumulate. So `lost permanent`, `lost seasonal` and `permanent to seasonal`
+    are all red on frame one, down the west coast, where the seasonal-grade classes live.
+
+    Nothing here is fixable in the data -- the classes carry no year for when the water went, and
+    for `permanent to seasonal` there is no such year to carry. So it is stated, with the size,
+    exactly as the layer's other unfixable limits are.
+    """
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "not from when it went" in caveat
+    assert f"{config.WATER_LOSS_DATED_AT_START_PCT:.0f}%" in caveat
+    assert "not water lost that year" in caveat
+
+
+def test_the_loss_dated_at_the_record_start_is_exactly_the_three_classes_counted():
+    """`config.WATER_LOSS_DATED_AT_START_PCT` is measured over one specific set of classes, and
+    nothing about the constant records which. Derive the set here instead, so that moving a class
+    across `CHANGE_TYPE_BY_TRANSITION` or `PRESENT_AT_START` breaks this rather than silently
+    leaving the caveat quoting a share of something else.
+
+    Same guard as `PRESENT_AT_START`'s own naming check, one level up: the hand-kept thing is now a
+    number in config, so what gets checked is the population it counts.
+    """
+    dated_at_start = {
+        code
+        for code in water.GSW_TRANSITION_CLASSES
+        if water.derive_change_type(code) == "loss" and code in water.PRESENT_AT_START
+    }
+
+    assert dated_at_start == {3, 6, 8}, (
+        "the classes behind WATER_LOSS_DATED_AT_START_PCT have changed -- re-measure it from the "
+        "extracted polygons before shipping, the caveat quotes it as fact"
+    )
+    # And every one of them really does ignore its measured onset, which is what puts them on the
+    # first frame in the first place.
+    for code in dated_at_start:
+        assert water.derive_valid_from(code, 1996, 1984) == 1984
+
+
 def test_caveat_names_small_ponds_by_their_local_name(monkeypatch):
     """A5: the caveat has to say what this layer cannot tell you, specifically enough to act on."""
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
