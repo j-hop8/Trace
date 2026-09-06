@@ -7,6 +7,7 @@ matters, so these never need real network access or credentials.
 """
 
 import pathlib
+import re
 
 import pytest
 
@@ -127,54 +128,83 @@ def test_an_end_year_cannot_exceed_the_record():
     assert water.derive_valid_to(3, 2025, 2021) == 2021
 
 
-# --- the built-up mask ---------------------------------------------------------------------
+# --- the managed-land mask ---------------------------------------------------------------------
 
 
-def test_only_seasonal_grade_classes_are_masked_on_built_up():
+def test_only_seasonal_grade_classes_are_masked_on_managed_land():
     """The mask must never reach a class involving permanent water at either end: those are real
     urban lakes and encroached ponds, not building shadow. Measured, 0% of `permanent` pixels sit
     on built-up ground in any region sampled."""
     involves_permanent = {1, 2, 3, 7, 8, 9}
-    assert water.MASK_ON_BUILT_UP.isdisjoint(involves_permanent)
-    assert water.MASK_ON_BUILT_UP.issubset(water.GSW_TRANSITION_CLASSES)
-    for code in water.MASK_ON_BUILT_UP:
+    assert water.MASK_ON_MANAGED_LAND.isdisjoint(involves_permanent)
+    assert water.MASK_ON_MANAGED_LAND.issubset(water.GSW_TRANSITION_CLASSES)
+    for code in water.MASK_ON_MANAGED_LAND:
         assert "seasonal" in water.GSW_TRANSITION_CLASSES[code]
 
 
-def test_classes_that_ended_are_kept_on_built_up_ground():
+def test_classes_that_ended_are_kept_on_managed_ground():
     """A 埤塘 filled in for housing is the most interesting urban water story Taiwan has, and it
     reads as `lost permanent` / `lost seasonal` sitting on built-up land -- 15% and 12% of those
     classes do. Masking them would delete the story along with the shadows."""
     for code in (3, 6):  # lost permanent, lost seasonal
-        assert code not in water.MASK_ON_BUILT_UP
+        assert code not in water.MASK_ON_MANAGED_LAND
 
 
 def test_ephemeral_seasonal_is_masked_but_ephemeral_permanent_is_not():
     """`ephemeral` means the water held neither epoch's stable state. Flickering sub-pixel
     *seasonal* water on built ground is shadow; the permanent-grade counterpart is not."""
-    assert 10 in water.MASK_ON_BUILT_UP
-    assert 9 not in water.MASK_ON_BUILT_UP
+    assert 10 in water.MASK_ON_MANAGED_LAND
+    assert 9 not in water.MASK_ON_MANAGED_LAND
 
 
-def test_the_built_up_asset_comes_from_config_not_a_literal():
+def test_the_managed_land_asset_comes_from_config_not_a_literal():
     """Asset ids live in config.py and nowhere else, exactly as for the land boundary."""
     source = pathlib.Path(water.__file__).read_text(encoding="utf-8").split('"""', 2)[2]
 
     assert "ESA/" not in source
     assert "config.WORLDCOVER_ASSET" in source
-    assert "config.WORLDCOVER_BUILT_UP" in source
+    assert "config.WORLDCOVER_MANAGED_CLASSES" in source
 
 
-def test_caveat_states_the_built_up_rule_and_what_it_costs(monkeypatch):
+def test_caveat_states_the_managed_land_rule_and_what_it_costs(monkeypatch):
     """A deliberate deletion of source data, not a resolution limit -- so the reader is owed the
     size of the gap, that it is spatial, and that ended water is kept."""
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
     caveat = water.WaterDomain().caveat
 
-    assert "built up" in caveat or "built-up" in caveat
-    assert f"{config.WATER_URBAN_SEASONAL_DROPPED_PCT:.1f}%" in caveat
+    assert "built-up or cropland" in caveat
+    assert f"{config.WATER_MANAGED_SEASONAL_DROPPED_PCT:.1f}%" in caveat
     assert "2021 snapshot" in caveat
     assert "ended" in caveat
+
+
+def test_both_managed_land_classes_are_covered():
+    """One rule over two land classes -- built-up shadow and irrigated cropland are the same
+    mistake, so the constant must carry both or the plains stay blue."""
+    assert set(config.WORLDCOVER_MANAGED_CLASSES) == {40, 50}  # cropland, built-up
+
+
+def test_the_rule_names_no_place_in_taiwan():
+    """The mask is a per-pixel test against island-wide rasters and must stay one. A coordinate
+    literal in this module would mean some region was special-cased, which is exactly what the
+    measurement said not to do: the artefact is a land-cover property, not a location."""
+    source = pathlib.Path(water.__file__).read_text(encoding="utf-8").split('"""', 2)[2]
+
+    # Taiwan's span is 119-122E / 21-26N; any bare decimal in that range would be a hard-coded
+    # place. Config holds the one bounding box the pipeline is allowed to know.
+    suspects = re.findall(r"\b(1(?:19|2[012])\.\d+|2[1-5]\.\d+)\b", source)
+    assert not suspects, f"hard-coded coordinates in water.py: {suspects}"
+
+
+def test_caveat_does_not_promise_gain_means_new_water(monkeypatch):
+    """For pixels JRC calls `new seasonal` the median was already water in 46% of the epoch-1 years
+    GSW could see (`new permanent`: 78%), and satellite revisit roughly doubled over the record --
+    so `gain` cannot be sold as water appearing where there was none."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "not that water appeared where there was none" in caveat
+    assert "revisit" in caveat
 
 
 # --- feature assembly ------------------------------------------------------------------------

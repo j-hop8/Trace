@@ -51,25 +51,36 @@ TAIWAN_LAND_BOUNDARY: Final[str] = "USDOS/LSIB_SIMPLE/2017"
 TAIWAN_LAND_BOUNDARY_FIELD: Final[str] = "country_na"
 TAIWAN_LAND_BOUNDARY_VALUE: Final[str] = "Taiwan"
 
-# Built-up ground, used to drop seasonal-grade water that is really building shadow. A 30 m pixel
-# in a dense CBD picks up the shadow between towers, and GSW classes it seasonal water: Taipei's
-# urban core came back with 204 ha of water over 30 km2, about 7x what its real park ponds add up
-# to, 71% of it `seasonal` or `new seasonal`.
+# Managed ground -- land people build on or farm -- used to drop seasonal-grade water that is
+# really shadow or irrigation. One rule over two land classes, because both are the same mistake:
+# a seasonal water detection on a managed surface reflects what people do to the ground, not a
+# water body.
+#
+#   - Built-up: a 30 m pixel in a dense CBD picks up the shadow between towers. Taipei's urban core
+#     came back with 204 ha of water over 30 km2, about 7x what its real park ponds hold, 71% of it
+#     `seasonal` or `new seasonal`.
+#   - Cropland: irrigated paddy floods on purpose. 74.7% of the water mapped over Yilan's plain sits
+#     on cropland and only 8.6% on actual water, which is why that plain rendered as solid water.
+#
+# The split is not local to those two places. Island-wide, the permanent-grade transition classes
+# sit 79.5% on WorldCover water (39,342 of 49,498 ha) -- they are water bodies -- while the
+# seasonal-grade classes manage only 32.1% (27,357 of 85,101 ha), the rest being grass 15.2%,
+# cropland 14.6%, tree 13.5% and built-up 9.3%.
 #
 # ESA WorldCover rather than a threshold on GSW's own quality bands, decided by measurement:
 #
 #   - `occurrence` and `recurrence` cannot separate the artefact from real seasonal water. Over
 #     class 4/5 pixels, occurrence is p50=12% in Taipei against p50=20% on the Yilan paddy plain,
 #     and recurrence p50=77% against p50=89% -- overlapping, with no clean cut.
-#   - Built-up ground separates them outright: 94% of Taipei's seasonal-class pixels sit on it,
-#     against 2% in Yilan, 5% in the Chiayi aquaculture belt and 13% in the Taoyuan pond belt.
-#     No `permanent`-class pixel is built-up in any of those regions, so the rule cannot reach a
-#     real urban lake.
+#   - Managed ground separates them outright: 94% of Taipei's seasonal-class pixels are built-up
+#     and 74.7% of Yilan's are cropland, against 5% in the Chiayi aquaculture belt and 13%/4.6% in
+#     the Taoyuan pond belt. No `permanent`-class pixel is built-up in any region sampled, so the
+#     rule cannot reach a real lake.
 #
-# A 2021 snapshot, so "built-up" means today. That is why only the seasonal-grade classes are
-# masked and the ones that say water *ended* are kept -- see water.MASK_ON_BUILT_UP.
+# A 2021 snapshot, so "managed" means today. That is why only the seasonal-grade classes are masked
+# and the ones that say water *ended* are kept -- see water.MASK_ON_MANAGED_LAND.
 WORLDCOVER_ASSET: Final[str] = "ESA/WorldCover/v200"
-WORLDCOVER_BUILT_UP: Final[int] = 50  # Map band class value
+WORLDCOVER_MANAGED_CLASSES: Final[tuple[int, ...]] = (40, 50)  # cropland, built-up
 
 # waterClass band values (JRC GSW YearlyHistory)
 WATER_CLASS_NO_DATA: Final[int] = 0
@@ -135,15 +146,15 @@ FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 # (transition >= 1) clipped to TAIWAN_LAND_BOUNDARY: components of at least MIN_PATCH_PIXELS
 # same-class pixels, against everything that actually reaches the sieve.
 #
-# The denominator is post-built-up-mask (128,214 ha), not JRC's full 134,600 ha, so this and
-# WATER_URBAN_SEASONAL_DROPPED_PCT below describe two different cuts and do not double-count the
+# The denominator is post-managed-land-mask (117,685 ha), not JRC's full 134,600 ha, so this and
+# WATER_MANAGED_SEASONAL_DROPPED_PCT below describe two different cuts and do not double-count the
 # same hectares. The caveat quotes them as two separate facts for the same reason.
 #
 # Measured per class region, not per water body, because that is what a feature now is: water.py
 # segments on JRC's transition class, so the sieve applies to the class region and a large lake
 # with a two-pixel fringe of a different class loses the fringe, not the lake.
 #
-# 113,158 of 128,214 ha. The first guess at this comment predicted a figure near
+# 103,175 of 117,685 ha. The first guess at this comment predicted a figure near
 # FOREST_EXTENT_RETAINED_PCT's 99.8%, reasoning that water is one near-continuous mass rather than
 # forest loss's scattered patches. Measuring says otherwise, and the reason is the segmentation
 # itself: splitting on transition class turns every lake's seasonal fringe into its own thin region,
@@ -151,7 +162,7 @@ FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 # have overstated completeness by 11 points in a line quoted to users.
 #
 # Re-measure whenever MIN_PATCH_PIXELS or the segmentation changes -- it is quoted to users.
-WATER_RETAINED_PCT: Final[float] = 88.3
+WATER_RETAINED_PCT: Final[float] = 87.7
 
 # Share of the water layer's area that is permanent water which disappeared outright -- JRC's
 # `lost permanent` class alone, 3,547 of 117,204 ha.
@@ -164,15 +175,17 @@ WATER_RETAINED_PCT: Final[float] = 88.3
 # the same failure mode the forest caveat's retained-percentage rule exists to prevent.
 WATER_LOST_PERMANENT_PCT: Final[float] = 3.0
 
-# Share of JRC's classed water area removed by the built-up rule (water.MASK_ON_BUILT_UP).
+# Share of JRC's classed water area removed by the managed-land rule
+# (water.MASK_ON_MANAGED_LAND): 4.7% on built-up ground plus 7.8% on cropland.
 #
 # Quoted because it is a deliberate deletion of source data, not a resolution limit: the layer
-# shows less water than JRC does, and a reader is owed the size of that gap. Small island-wide and
-# very large locally -- that asymmetry is the point, and is why the rule is spatial rather than a
-# class drop, which would have cost 52% to fix the same city.
+# shows less water than JRC does, and a reader is owed the size of that gap. Modest island-wide and
+# very large locally -- Yilan's paddy plain keeps 24% of JRC's raw water where the Chiayi
+# aquaculture belt keeps 98%. That asymmetry is the point, and is why the rule is spatial rather
+# than a class drop, which would have cost 63% island-wide to fix the same places.
 #
-# Re-measure whenever MASK_ON_BUILT_UP or WORLDCOVER_ASSET changes.
-WATER_URBAN_SEASONAL_DROPPED_PCT: Final[float] = 4.7
+# Re-measure whenever MASK_ON_MANAGED_LAND or WORLDCOVER_ASSET changes.
+WATER_MANAGED_SEASONAL_DROPPED_PCT: Final[float] = 12.6
 
 M2_PER_HA: Final[float] = 10_000.0
 

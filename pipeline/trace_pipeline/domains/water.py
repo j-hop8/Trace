@@ -120,29 +120,36 @@ PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 8})
 #: state is still current.
 ENDED: frozenset[int] = frozenset({3, 6, 9, 10})
 
-#: Classes dropped where `config.WORLDCOVER_ASSET` says the ground is built-up — the seasonal-grade
-#: ones, which never involve permanent water at either end of the record. `config` records the
-#: measurements that chose a built-up mask over a threshold on GSW's own quality bands.
+#: Classes dropped where `config.WORLDCOVER_MANAGED_CLASSES` says the ground is built on or farmed
+#: — the seasonal-grade ones, which never involve permanent water at either end of the record.
+#: `config` records the measurements that chose a managed-land mask over a threshold on GSW's own
+#: quality bands.
 #:
-#: Dropping these classes *everywhere* was the obvious fix and is the wrong one: it cuts real data
-#: harder than the artefact. Taiwan's genuine seasonal water is carried by the same classes — the
-#: Yilan paddy plain is 75.8% `new seasonal`, correctly, because paddy floods seasonally. Removing
-#: 4/5/10 island-wide leaves Taipei 15% of its area but Yilan 7% of its, at a cost of 52% of the
-#: whole layer. Restricted to built-up ground the same rule costs 4.7%.
+#: One rule over both land classes, because they are the same mistake: a seasonal water detection
+#: on a surface people manage reflects what they do to the ground — shadow between towers,
+#: irrigation in a paddy — not a water body. Island-wide the permanent-grade classes sit 79.5% on
+#: WorldCover water while the seasonal-grade ones manage 32.1%, so this is where the layer's
+#: trustworthy half divides from the rest, not a local patch.
 #:
-#: **Why 3, 6 and 9 are not here.** WorldCover is a 2021 snapshot, so built-up is a claim about
-#: today, and a class saying the water *ended* is entirely consistent with having been built over —
-#: a 埤塘 filled in for housing, which is the most interesting urban water story in Taiwan. 15% of
-#: `lost permanent` and 12% of `lost seasonal` sit on built-up land for exactly that reason, and
-#: masking them would delete the story along with the shadows.
+#: Dropping these classes *everywhere* instead was the obvious fix and is the wrong one: it cuts
+#: real data harder than the artefact. Taiwan's genuine seasonal water is carried by the same
+#: classes — the Chiayi aquaculture belt drains its fish ponds, the Taoyuan 埤塘 are seasonal.
+#: Removing 4/5/10 island-wide costs 63% of the layer and takes Taoyuan to 52% and Chiayi to 74%;
+#: restricted to managed ground the same rule costs 12.6% and leaves them at 90% and 98%.
+#:
+#: **Why 3, 6 and 9 are not here.** WorldCover is a 2021 snapshot, so managed is a claim about
+#: today, and a class saying the water *ended* is entirely consistent with the ground having been
+#: taken over — a 埤塘 filled in for housing or converted to a field, which is the most interesting
+#: water story Taiwan has. 15% of `lost permanent` and 12% of `lost seasonal` sit on built-up land
+#: for exactly that reason, and masking them would delete the story along with the artefact.
 #:
 #: **Why 10 is here despite also having ended.** `ephemeral` means the water never held either
-#: epoch's stable state; it flickered. Flickering sub-pixel water on built ground is a shadow, not
-#: a pond that was filled in.
+#: epoch's stable state; it flickered. Flickering sub-pixel water on managed ground is shadow or a
+#: wet field, not a pond that was filled in.
 #:
 #: `permanent to seasonal` (8) is 16% built-up and is likewise kept: it involves permanent water,
-#: so it is a pond encroached on rather than a shadow.
-MASK_ON_BUILT_UP: frozenset[int] = frozenset({4, 5, 10})
+#: so it is a pond encroached on rather than an artefact.
+MASK_ON_MANAGED_LAND: frozenset[int] = frozenset({4, 5, 10})
 
 #: Minimum mapping unit, in pixels rather than hectares — same reason as forest's
 #: `config.MIN_PATCH_PIXELS`: both sources share `config.NATIVE_SCALE_M`, and a Landsat pixel's
@@ -257,33 +264,34 @@ class UnknownTransitionClass(ValueError):
     """
 
 
-#: Built-up ground as one ee.Image, built at most once per process.
-_built_up_image: Any | None = None
+#: Managed ground as one ee.Image, built at most once per process.
+_managed_land_image: Any | None = None
 
 
-def built_up() -> Any:
-    """Built-up ground as a 1/0 ee.Image, cached for the life of the process.
+def managed_land() -> Any:
+    """Ground people build on or farm, as a 1/0 ee.Image, cached for the life of the process.
 
     A module-level function for the same reason as :func:`taiwan_land`: a test can replace it
     without touching `WaterDomain`, and the asset id lives in `config` alone.
 
     `unmask(0)` is the load-bearing part. Anywhere the source does not cover has to read as *not*
-    built, so a gap in the reference dataset keeps the water rather than deleting it — a mask that
+    managed, so a gap in the reference dataset keeps the water rather than deleting it — a mask that
     fails open loses nothing, one that fails closed silently erases real data in exactly the places
     nobody is looking.
     """
     import ee
 
-    global _built_up_image
-    if _built_up_image is None:
-        _built_up_image = (
+    global _managed_land_image
+    if _managed_land_image is None:
+        classes = list(config.WORLDCOVER_MANAGED_CLASSES)
+        _managed_land_image = (
             ee.ImageCollection(config.WORLDCOVER_ASSET)
             .first()
             .select("Map")
-            .eq(config.WORLDCOVER_BUILT_UP)
+            .remap(classes, [1] * len(classes), 0)
             .unmask(0)
         )
-    return _built_up_image
+    return _managed_land_image
 
 
 def derive_change_type(transition_code: int) -> str:
@@ -449,15 +457,22 @@ class WaterDomain(Domain):
             f"{config.WATER_RETAINED_PCT:.0f}% of the water area the source records for Taiwan, so "
             "the smallest 埤塘 (irrigation ponds) may be missed entirely, or merged with a "
             "neighbour if they sit closer together than one pixel. "
-            "Seasonal water on built-up ground is deliberately left out. At 30 m a dense city "
-            "block reads the shadow between towers as seasonal water, which put about seven times "
-            "more water in central Taipei than its parks actually hold, so seasonal patches are "
-            "dropped where the ground is built up — about "
-            f"{config.WATER_URBAN_SEASONAL_DROPPED_PCT:.1f}% of the source's water area, almost "
-            "all of it urban. Water the source says *ended* is kept there, so a pond filled in and "
-            "built over still appears, and so is every permanent body, so lakes inside cities "
-            "remain. The built-up reference is a single 2021 snapshot, so genuine seasonal water "
-            "in a district urbanised during the record is removed along with the shadows. "
+            "Seasonal water on ground that is built on or farmed is deliberately left out. At 30 m "
+            "a dense city block reads the shadow between towers as seasonal water, and an "
+            "irrigated paddy reads as water because it genuinely is one for a few weeks a year — "
+            "neither is a water body, and together they put about seven times more water in "
+            "central Taipei than its parks hold and turned Taiwan's rice plains solid blue. "
+            "Seasonal patches are therefore dropped wherever the ground is built-up or cropland — "
+            f"about {config.WATER_MANAGED_SEASONAL_DROPPED_PCT:.1f}% of the source's water area. "
+            "Water the source says *ended* is kept there, so a pond filled in for housing or "
+            "converted to a field still appears, and so is every permanent body, so lakes inside "
+            "cities and farmland remain. That reference is a single 2021 snapshot, so genuine "
+            "seasonal water in a district built up or brought into cultivation during the record "
+            "is removed along with the artefacts. "
+            "Gain means a body holds water more of the time than the early record shows, not that "
+            "water appeared where there was none: satellite revisit roughly doubled over the "
+            "period, so a body that was always seasonally wet is caught more often later and can "
+            "read as gain on that alone. "
             "Dates are weaker than the classes. Landsat barely covered Taiwan early on — the "
             "source has no usable observation of the island at all in 1985, and little before "
             f"1988 — so water already present when the record opens is dated {first} because that "
@@ -538,17 +553,21 @@ class WaterDomain(Domain):
             ee.Image(config.GSW_MAPPING_LAYERS).select("transition").rename("transition").toInt8()
         )
 
-        # Seasonal-grade water sitting on ground that is built-up today is far more likely to be
-        # the shadow between towers than a water body — see `MASK_ON_BUILT_UP` for why these
-        # classes and not the ones that say the water ended. Masking the band rather than filtering
-        # features afterwards means these pixels never form regions at all, so a shadow cannot
-        # merge into a neighbouring real patch and drag its geometry across the city.
+        # Seasonal-grade water sitting on ground people build on or farm is far more likely to be
+        # the shadow between towers or an irrigated field than a water body — see
+        # `MASK_ON_MANAGED_LAND` for why these classes and not the ones that say the water ended.
+        # Masking the band rather than filtering features afterwards means these pixels never form
+        # regions at all, so an artefact cannot merge into a neighbouring real patch and drag its
+        # geometry across the city or the plain.
+        #
+        # A per-pixel test against two island-wide rasters, evaluated identically over every grid
+        # cell: no place in Taiwan is named here or anywhere else in this module, and none may be.
         #
         # `remap` off the frozenset rather than a chain of `.eq().Or()`, so the constant is the
         # single definition and the code cannot drift from it.
-        maskable_codes = sorted(MASK_ON_BUILT_UP)
+        maskable_codes = sorted(MASK_ON_MANAGED_LAND)
         maskable = transition.remap(maskable_codes, [1] * len(maskable_codes), 0)
-        transition = transition.updateMask(maskable.And(built_up()).Not())
+        transition = transition.updateMask(maskable.And(managed_land()).Not())
 
         # Land before vectorizing, not after. Clipping the polygons afterwards would mean asking
         # Earth Engine to vectorize the whole Taiwan Strait first and then throwing almost all of
