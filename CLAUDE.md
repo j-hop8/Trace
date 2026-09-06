@@ -44,9 +44,16 @@ start of the range to the current year — 2,656 features at 2001 against 91,088
 playback started fast and slowed to a crawl. A constant paint value is the only style change
 MapLibre applies without touching tile data, and cohorts are what turn the year into one.
 
-Cohorts assume features are **open-ended** (`valid_to: null`), which is what the pipeline emits: a
-cohort switches on at its year and never switches off. A domain that ends a feature's validity
-needs this revisited, not merely re-run.
+A cohort is keyed on the year the feature's **mark** becomes true, not on `valid_from`: a feature
+that ends carries the change it depicts at its end, so a closed-ended feature (`valid_to` set) is
+bucketed at `valid_to + 1` — the first year its loss is observable, since `valid_to` is the last
+year the feature was still true. Open-ended features are bucketed at `valid_from` and are
+unaffected. Water's loss patches are the closed-ended case: keyed on `valid_from` they painted a
+pond that dried up in 1996 as lost from 1988 on.
+
+A cohort still switches on at its year and never switches off — that is a claim about the mark, not
+the feature. What accumulates is the record of changes observed by the selected year, and a change
+once observed stays observed.
 
 **3. Every feature carries the full B4 schema.** `domain`, `subtype`, `valid_from`, `valid_to`,
 `change_type`, `metric`, `source`, `method`, `confidence` — defined once in

@@ -54,10 +54,10 @@ function styleExpression(entry: DomainManifestEntry, channel: 'color' | 'stroke'
 /**
  * The years a domain's layers are split across — one *cohort* per year of its coverage.
  *
- * Time is still a feature attribute: each cohort selects on `valid_from`, and the manifest's
- * range is what decides how many there are. What changed is that the selection is **fixed** at
- * build time rather than rewritten as the slider moves, which is what makes the animation free.
- * See `cohortFilter`.
+ * Time is still a feature attribute: each cohort selects on the year the feature's mark becomes
+ * true, and the manifest's range is what decides how many there are. What changed is that the
+ * selection is **fixed** at build time rather than rewritten as the slider moves, which is what
+ * makes the animation free. See `MARK_YEAR` and `cohortFilter`.
  */
 export function cohortYears(entry: DomainManifestEntry): number[] {
   const years: number[] = [];
@@ -66,11 +66,53 @@ export function cohortYears(entry: DomainManifestEntry): number[] {
 }
 
 /**
- * One cohort's share of a domain: the features that begin in that year, and nothing else.
+ * The year a feature's mark becomes true on the map.
  *
- * The first cohort takes everything from that year *back*, so a baseline laid down before the
- * slider's first year — forest's 2000 canopy under a range starting at 2001 — lands in it rather
- * than in no cohort at all.
+ * Not the same question as "when did this feature begin". A feature that *ends* carries the change
+ * it depicts at its end, not at its start: water's `loss` patches record `valid_from` = the year
+ * the pond appeared and `valid_to` = the last year it was still water, so bucketing them by
+ * `valid_from` painted a pond that dried up in 1996 as lost from 1988 onward — thirty-three years
+ * of loss red for a loss that had not happened, and a click target whose own readout said
+ * "present 1988–1996" while the map drew it as gone.
+ *
+ * `valid_to + 1`, not `valid_to`: the pipeline documents `valid_to` as the last year the patch was
+ * *still water*, so the first year the loss is observable is the one after it. Marking it at
+ * `valid_to` would have the map contradict the feature's own attributes for one year. The `+ 1`
+ * cannot leave the range — `derive_change_type` only calls a patch lost when it stopped before the
+ * record ends, so `valid_to` is at most the last year minus one.
+ *
+ * Open-ended features are unaffected: forest's loss carries the loss year in `valid_from` and no
+ * `valid_to` at all, so this returns `valid_from` and every forest cohort is byte-identical to
+ * what it was before.
+ *
+ * **`case`, not `coalesce`.** `["coalesce", ["+", ["get", "valid_to"], 1], ["get", "valid_from"]]`
+ * reads as the obvious spelling and is silently catastrophic: `coalesce` does not skip a branch
+ * that *errors*, and `+` on a missing property fails its number assertion, which makes MapLibre
+ * discard the whole filter and fall back to `false`. Verified against the style spec's own
+ * evaluator — it takes every open-ended feature off the map, which is to say all of forest. `case`
+ * evaluates only the branch it selects, so `+` never sees a missing value. Tippecanoe omits null
+ * properties rather than encoding them, so `has` is the right test: `valid_to` is absent for an
+ * open-ended feature, never present-and-null.
+ */
+const MARK_YEAR = [
+  'case',
+  ['has', 'valid_to'],
+  ['+', ['get', 'valid_to'], 1],
+  ['get', 'valid_from'],
+];
+
+/**
+ * One cohort's share of a domain: the features whose mark falls in that year, and nothing else.
+ *
+ * The range is closed at both ends so that no feature is silently dropped for landing outside it.
+ * The first cohort takes everything from its year *back*, which is what keeps a baseline laid down
+ * before the slider's first year — forest's 2000 canopy under a range starting at 2001 — from
+ * belonging to no cohort at all. The last takes everything from its year *on*, for the same reason
+ * in the other direction: a manifest range can be narrower than the data it describes (water's is
+ * probed live, and falls back to v1.4's 2021 when the v1.5 asset is unreachable), and a mark year
+ * past the end would otherwise be built into no layer and never drawn. Both are no-ops when the
+ * range matches the data. A single-year domain, whose one cohort is both first and last, resolves
+ * to `<=`; it is the degenerate case and nothing emits one today.
  *
  * Every clause here is constant. That is the entire point: a filter that never changes is parsed
  * into its bucket once, and the year is then animated by opacity alone, which MapLibre applies
@@ -78,21 +120,19 @@ export function cohortYears(entry: DomainManifestEntry): number[] {
  * every feature from the start of the range to the current year — 2,656 of them at 2001 against
  * 91,088 at 2025, which is exactly why playback used to begin quickly and grind to a crawl.
  *
- * **Precondition: features are open-ended.** A cohort is switched on for every year at or after
- * its own and never switched off again, so a feature that *stops* being true — a non-null
- * `valid_to` — would keep drawing past its end. Every feature the pipeline emits today carries
- * `valid_to: null`, so this holds; a domain that starts emitting one needs this revisited rather
- * than merely re-run.
+ * A cohort is switched on for every year at or after its own and never switched off again. That is
+ * a statement about the *mark*, not about the feature: what accumulates is the record of changes
+ * observed up to the selected year, and a change, once observed, stays observed.
  */
 function cohortFilter(
   entry: DomainManifestEntry,
   cohort: number,
   test: FilterSpecification,
 ): FilterSpecification {
-  const begins: FilterSpecification =
-    cohort === entry.temporal.start
-      ? (['<=', ['get', 'valid_from'], cohort] as FilterSpecification)
-      : (['==', ['get', 'valid_from'], cohort] as FilterSpecification);
+  const operator =
+    cohort === entry.temporal.start ? '<=' : cohort === entry.temporal.end ? '>=' : '==';
+
+  const begins = [operator, MARK_YEAR, cohort] as unknown as FilterSpecification;
 
   return ['all', begins, test] as FilterSpecification;
 }

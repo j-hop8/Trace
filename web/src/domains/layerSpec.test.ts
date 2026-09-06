@@ -9,6 +9,7 @@
  * the end, and it is the reason this file exists.
  */
 
+import { featureFilter } from '@maplibre/maplibre-gl-style-spec';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -219,5 +220,119 @@ describe('cost of a step', () => {
     }
 
     expect(writes).toBe(ROLES * YEARS);
+  });
+});
+
+/**
+ * Which cohort a feature actually lands in, decided by MapLibre's own filter evaluator rather
+ * than by reading the filter text. The distinction matters here: the obvious `coalesce` spelling
+ * of the mark year parses cleanly and *looks* right, and then silently selects nothing at all.
+ */
+describe('the year a mark becomes true', () => {
+  /** Water's range: a domain whose loss features end rather than run open. */
+  const water: DomainManifestEntry = {
+    ...entry,
+    id: 'water',
+    label: { en: 'Water', zh: '水體' },
+    hue: '#2563eb',
+    changeTypes: ['gain', 'loss', 'stable'],
+    temporal: { start: 1984, end: 2021 },
+    tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayer: 'water' },
+  };
+
+  /** The cohorts drawing a feature at a given year — what the reader sees, opacity included. */
+  const shownFor = (
+    domain: DomainManifestEntry,
+    year: number,
+    properties: Record<string, unknown>,
+  ) =>
+    layersFor(domain, year, 'change')
+      .layers.filter((layer) => opacityOf(layer) > 0)
+      .filter((layer) =>
+        featureFilter(layer.filter as never, layer.id).filter(
+          { zoom: 10 } as never,
+          { properties } as never,
+          undefined as never,
+        ),
+      )
+      .map((layer) => layer.id);
+
+  it('draws a closed-ended feature from the year its change is observed, not its first year', () => {
+    // A pond that was water from 1988 and dried up in 1996. Keyed on valid_from it was painted
+    // loss red from 1988 — thirty-three years of a loss that had not happened yet.
+    const pond = { valid_from: 1988, valid_to: 1996, change_type: 'loss' };
+
+    expect(shownFor(water, 1988, pond)).toEqual([]);
+    expect(shownFor(water, 1996, pond)).toEqual([]);
+    expect(shownFor(water, 1997, pond).length).toBeGreaterThan(0);
+    expect(shownFor(water, 2021, pond).length).toBeGreaterThan(0);
+  });
+
+  it('marks it at valid_to + 1, so the map never contradicts the feature’s own dates', () => {
+    // valid_to is the last year the patch was *still water*, and the readout says so outright
+    // ("present 1988–1996"). Marking the loss at 1996 would have the map call it gone in a year
+    // its own attributes call it present.
+    const pond = { valid_from: 1988, valid_to: 1996, change_type: 'loss' };
+
+    expect(shownFor(water, 1996, pond)).toEqual([]);
+
+    const shown = shownFor(water, 1997, pond);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.every((id) => id.endsWith('-1997'))).toBe(true);
+  });
+
+  it('keeps it out of hit-testing until then, so a click cannot open a future loss', () => {
+    // The cohorts are all on the map at every year, drawn at zero opacity, and
+    // queryRenderedFeatures reads geometry rather than paint — so the layer *names* passed to it
+    // are the only thing standing between a click at 1990 and a readout for a 1997 loss.
+    const pond = { valid_from: 1988, valid_to: 1996, change_type: 'loss' };
+    const drawnBy = (year: number) =>
+      layersFor(water, year, 'change').layers.filter((layer) =>
+        featureFilter(layer.filter as never, layer.id).filter(
+          { zoom: 10 } as never,
+          { properties: pond } as never,
+          undefined as never,
+        ),
+      );
+
+    const queried = new Set(layerIdsForYear(water, 1990));
+    expect(drawnBy(1990).some((layer) => queried.has(layer.id))).toBe(false);
+
+    const later = new Set(layerIdsForYear(water, 1997));
+    expect(drawnBy(1997).some((layer) => later.has(layer.id))).toBe(true);
+  });
+
+  it('leaves open-ended features exactly where they were', () => {
+    // Forest carries the loss year in valid_from and no valid_to at all, so nothing about its
+    // bucketing may move. This is the regression guard for the fix itself.
+    const clearing = { valid_from: 2005, change_type: 'loss' };
+
+    expect(shownFor(entry, 2004, clearing)).toEqual([]);
+    expect(shownFor(entry, 2005, clearing).every((id) => id.endsWith('-2005'))).toBe(true);
+    expect(shownFor(entry, 2005, clearing).length).toBeGreaterThan(0);
+    expect(shownFor(entry, 2025, clearing).length).toBeGreaterThan(0);
+  });
+
+  it('keeps a feature whose mark falls outside the range, at the nearest end', () => {
+    // A manifest range can be narrower than the data it describes — water's is probed live and
+    // falls back to v1.4's 2021 — and a mark in no cohort at all would simply never be drawn.
+    const beforeStart = { valid_from: 1970, change_type: 'gain' };
+    const pastEnd = { valid_from: 1990, valid_to: 2024, change_type: 'loss' };
+
+    expect(shownFor(water, 1984, beforeStart).every((id) => id.endsWith('-1984'))).toBe(true);
+    expect(shownFor(water, 1984, beforeStart).length).toBeGreaterThan(0);
+
+    expect(shownFor(water, 2020, pastEnd)).toEqual([]);
+    expect(shownFor(water, 2021, pastEnd).every((id) => id.endsWith('-2021'))).toBe(true);
+    expect(shownFor(water, 2021, pastEnd).length).toBeGreaterThan(0);
+  });
+
+  it('never lets a cohort filter mention the year being shown', () => {
+    // The property the whole model rests on, restated for the new expression: adding the mark
+    // year must not have made any filter a function of the slider.
+    const at1990 = layersFor(water, 1990, 'change').layers.map((l) => [l.id, l.filter]);
+    const at2015 = layersFor(water, 2015, 'change').layers.map((l) => [l.id, l.filter]);
+
+    expect(at1990).toEqual(at2015);
   });
 });
