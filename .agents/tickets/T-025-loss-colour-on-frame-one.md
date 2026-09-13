@@ -78,9 +78,11 @@ settled it. The colour system. `schema/**`. The extraction itself: this needs no
   costs. Any fix that implies a loss year for classes 3/6/8 beyond the `ENDED` measurement is
   inventing one; class 8 has no `valid_to` at all.
 
-**Status:** option (a) landed on `claude/T-025-loss-colour-on-frame-one`. The layer now states
-the fact and its size. Option (b) is still open and still blocked on T-024's `valid_to` axis —
-the first frame is now *explained*, not yet *correct*.
+**Status:** option (a) shipped in PR #16. The layer now states the fact and its size — the first
+frame is *explained*, not yet *correct*. Option (b) is still open and this ticket stays open for
+it. It is blocked on a `valid_to` cohort axis that the text above attributes to T-024, but **no
+T-024 ticket exists** — that has to be written and costed before anyone picks (b) up. The
+`*ended*` markup fix that rode along on this branch was carved out as T-026 at review.
 
 **Acceptance criteria:**
 - [ ] A reader looking at the first frame of the water timeline can tell that the red is water
