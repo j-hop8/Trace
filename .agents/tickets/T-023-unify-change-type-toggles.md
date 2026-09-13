@@ -7,7 +7,10 @@ colour ramp so hue always names the domain.
 - `web/src/domains/colors.ts` (+ new `web/src/domains/colors.test.ts`)
 - `web/src/domains/layerSpec.ts`, `web/src/domains/layerSpec.test.ts`, `web/src/domains/layerSpec.tiles.test.ts`
 - `web/src/domains/manifest.ts`
-- `web/src/store/useTraceStore.ts`
+- `web/src/types/feature.ts` (`CHANGE_TYPE_ORDER` — the draw/list order belongs beside the union it
+  orders; added at review, the file was omitted from the original list)
+- `web/src/store/useTraceStore.ts` (+ `useTraceStore.test.ts` — omitted from the original list
+  alongside the other three test files; added at review)
 - `web/src/components/LayerToggles.tsx`
 - `web/src/map/useDomainLayers.ts`
 - `CLAUDE.md`
