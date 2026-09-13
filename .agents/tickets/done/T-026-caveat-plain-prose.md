@@ -28,10 +28,10 @@ correct decision and the reason this contract exists. `schema/**`. Any other dom
 if the guard fails on one, that is a finding for its own ticket, not a drive-by edit here.
 
 **Acceptance criteria:**
-- [ ] No caveat from any domain in `domains.all_ids()` contains `*`, `` ` `` or `](`.
-- [ ] The water caveat reads "says has ended" and the rendered string is otherwise unchanged.
-- [ ] The guard is parametrized over every domain, so adding a domain adds a case.
-- [ ] The `gsw_v15_reachable` probe is stubbed in the test — it must not touch the network.
+- [x] No caveat from any domain in `domains.all_ids()` contains `*`, `` ` `` or `](`.
+- [x] The water caveat reads "says has ended" and the rendered string is otherwise unchanged.
+- [x] The guard is parametrized over every domain, so adding a domain adds a case.
+- [x] The `gsw_v15_reachable` probe is stubbed in the test — it must not touch the network.
 
 **Verify:** `cd pipeline && pytest && ruff check .`
 **Owner:** claude
