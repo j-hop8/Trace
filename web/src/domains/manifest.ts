@@ -9,6 +9,7 @@
  * file or any component — only a new entry in the JSON.
  */
 
+import { CHANGE_TYPE_ORDER } from '@/types/feature';
 import type { ChangeType, DomainId } from '@/types/feature';
 
 export interface DomainSource {
@@ -28,12 +29,13 @@ export interface DomainManifestEntry {
   /**
    * Which change types this domain's tileset contains.
    *
-   * Read rather than assumed, because it decides what the UI offers: a domain carrying both an
-   * `extent` and a change type can be viewed either way and gets a view toggle, and one carrying
-   * only changes does not. Testing for a domain id instead would put `forest` back into the
-   * components, which is the coupling the manifest exists to remove.
+   * Measured by the pipeline from the built tiles, not declared — so a domain whose extent pass was
+   * interrupted advertises what it actually has. This is the whole basis of the layer controls:
+   * one toggle per entry here, and one set of map layers per entry here. Testing for a domain id
+   * instead would put `forest` back into the components, which is the coupling the manifest exists
+   * to remove.
    *
-   * Optional: a manifest written before this field existed simply has no extent to show.
+   * Optional: a manifest written before this field existed offers no per-state control at all.
    */
   changeTypes?: ChangeType[];
   /**
@@ -136,22 +138,19 @@ export function coversYear(entry: DomainManifestEntry, year: number): boolean {
 }
 
 /**
- * The two questions a domain can be asked.
+ * The states this domain can be asked to show, in the order they should be listed and drawn.
  *
- * `change` is what moved — the loss patches accumulating as the year advances. `extent` is what
- * is left — the baseline with everything lost by that year taken out of it. Same tileset, same
- * time filter; only which features are drawn, and how, differs.
- */
-export type ViewMode = 'change' | 'extent';
-
-/**
- * Whether a domain can answer both questions, and so should offer the toggle.
+ * The single source for both the toggles and the map layers, so a control can never appear for a
+ * state the tileset cannot fill, and a layer can never be built with no way to switch it off.
  *
- * Both halves are required. A domain with extent but no change type has no second view to switch
- * to, and one with changes but no baseline cannot say what is left — offering a toggle in either
- * case would give the reader an empty layer and no explanation.
+ * Sorted into `CHANGE_TYPE_ORDER` rather than taken as-is: the pipeline reads these back out of
+ * tippecanoe's tilestats, which reports them alphabetically, and "gain, loss, stable" is an
+ * accident of the alphabet rather than an order that means anything on a map.
+ *
+ * Empty for a manifest written before `changeTypes` existed — such a domain draws nothing, which is
+ * the honest reading of "the tileset never said what it holds".
  */
-export function supportsExtentView(entry: DomainManifestEntry): boolean {
-  const types = entry.changeTypes ?? [];
-  return types.includes('extent') && types.some((type) => type !== 'extent');
+export function selectableTypes(entry: DomainManifestEntry): ChangeType[] {
+  const present = new Set(entry.changeTypes ?? []);
+  return CHANGE_TYPE_ORDER.filter((changeType) => present.has(changeType));
 }

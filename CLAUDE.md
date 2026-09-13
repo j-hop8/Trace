@@ -29,7 +29,11 @@ invariants keep it modular; breaking any of them is what turns this back into a 
 **1. The domain manifest is the spine.** The pipeline *emits* `data/domains.json`; the web app
 *iterates* it. Nothing in `web/` may hardcode `water` or `forest` — no domain literals in
 components, no per-domain branches. Adding a domain is a pipeline module plus a manifest entry.
-The manifest also drives the attribution line, per-layer caveats, and per-layer slider ranges.
+The manifest also drives the attribution line, per-layer caveats, per-layer slider ranges, and
+**which states each domain offers** — the `changeTypes` the pipeline measures out of the built
+tileset become one toggle each (`selectableTypes` in
+[manifest.ts](web/src/domains/manifest.ts)) and one set of map layers each. So a control can never
+appear for a state the data cannot fill, and a layer is never built with no way to switch it off.
 
 **2. Time is a feature attribute, not a tileset.** Each feature carries `valid_from` / `valid_to`,
 and one tileset per domain covers every year — never a tileset per year. This is why there is no
@@ -44,21 +48,38 @@ start of the range to the current year — 2,656 features at 2001 against 91,088
 playback started fast and slowed to a crawl. A constant paint value is the only style change
 MapLibre applies without touching tile data, and cohorts are what turn the year into one.
 
-Cohorts assume features are **open-ended** (`valid_to: null`), which is what the pipeline emits: a
-cohort switches on at its year and never switches off. A domain that ends a feature's validity
-needs this revisited, not merely re-run.
+Cohorts assume features are **open-ended** (`valid_to: null`): a cohort switches on at its year and
+never switches off. Forest holds to this. **Water does not** — JRC's `lost *` and `ephemeral *`
+transition classes carry a real `valid_to`, so roughly 42k water features are drawn for years in
+which they no longer existed. Tracked as `T-024`; the fix is a second cohort axis, not a re-run.
+Until it lands, a domain that ends a feature's validity is knowingly mis-drawn rather than
+unsupported.
 
 **3. Every feature carries the full B4 schema.** `domain`, `subtype`, `valid_from`, `valid_to`,
 `change_type`, `metric`, `source`, `method`, `confidence` — defined once in
 [schema/feature.schema.json](schema/feature.schema.json). PostGIS is deferred to Phase 2, but the
 schema is not, so that migration stays a data load rather than a redesign.
 
-### Colour is a pure function
+### Colour is a pure function, and hue means the domain
 
 `web/src/domains/colors.ts` exports one function, `styleFor(hue, changeType)`, returning
-`{ color, pattern, stroke }`. Extent uses the domain hue; loss uses the universal red/amber.
-Colour and pattern come back together on purpose — a split API lets a caller take the loss red and
-skip the hatch, which is the exact accessibility failure A5 exists to prevent. **No colour
+`{ color, mark, stroke, pattern }`.
+
+**Every state is a transform of the domain's own hue — there is no cross-domain change colour.**
+Extent is the hue itself; `stable` is pulled toward the basemap's grey so it recedes; `gain` is
+lifted toward white; `loss` is the hue emptied almost to black. This replaced a rule where loss in
+every domain was one shared red, which reads correctly at two domains and stops scaling at six: a
+shared red says only that *something, somewhere* was lost, and the hue no longer says what. The
+palettes of any two domains are disjoint, and `colors.test.ts` asserts it.
+
+`mark` is the third channel and it exists for one reason: below `SCALE_SPLIT_ZOOM` a 30 m patch is
+sub-pixel, so the **line is the feature**, and loss is the darkest thing the ramp produces. A
+hairline in forest's loss green on the near-black basemap is invisible — at island view, the zoom
+the map opens at, loss would simply not be there. So loss draws its sub-pixel mark at the *bright*
+end of the same hue. Every other state has `mark === color`.
+
+Colour and pattern come back together on purpose — a split API lets a caller take the loss colour
+and skip the hatch, which is the exact accessibility failure A5 exists to prevent. **No colour
 literals anywhere else in `web/`.**
 The basemap must show no blue and no green — those hues are reserved to mean "water domain" and
 "forest domain", so the Protomaps style suppresses its own water and vegetation fills.
@@ -72,7 +93,9 @@ The basemap must show no blue and no green — those hues are reserved to mean "
   negligible; "this shows 89% of measured loss" is the fact a reader needs. Minimum mapping units
   are set by measuring what they discard, never by intuition: the first guess at 0.5 ha would
   have dropped a third of Taiwan's recorded tree-cover loss.
-- Loss is never signalled by colour alone — pair with pattern or icon.
+- Loss is never signalled by colour alone — pair with pattern or icon. Now load-bearing rather
+  than belt-and-braces: with no shared loss red, the hatch is the only cross-domain signal that a
+  patch means *gone*.
 
 ## Dual-Agent Workflow
 

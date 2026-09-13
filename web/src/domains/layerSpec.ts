@@ -2,8 +2,8 @@
  * Turns a manifest entry into MapLibre layers.
  *
  * This is the only file that knows how a domain becomes pixels, and it knows nothing about *which*
- * domains exist — everything comes from the entry it is handed. Adding a domain adds a manifest
- * record and nothing else.
+ * domains exist — everything comes from the entry it is handed, including which layers to build at
+ * all. Adding a domain adds a manifest record and nothing else.
  *
  * Colour never appears here as a literal. `styleFor` is the single authority (A2), and because it
  * returns the accessible pattern with the colour, the hatch that keeps loss from being
@@ -17,10 +17,9 @@ import type {
 } from 'maplibre-gl';
 
 import { CLEARED, styleFor } from '@/domains/colors';
-import type { DomainManifestEntry, ViewMode } from '@/domains/manifest';
+import type { DomainManifestEntry } from '@/domains/manifest';
+import { CHANGE_TYPE_ORDER } from '@/types/feature';
 import type { ChangeType } from '@/types/feature';
-
-const CHANGE_TYPES: ChangeType[] = ['extent', 'loss', 'gain', 'stable'];
 
 /** Image id for the diagonal hatch registered on the map. */
 export const HATCH_IMAGE = 'trace-hatch';
@@ -30,26 +29,11 @@ export const HATCH_IMAGE = 'trace-hatch';
  *
  * Measured, not guessed: decoding the built tiles, a median forest-loss ring is 2 tile units
  * across at z8 (a quarter of a CSS pixel) and 9 at z10; by z12 it is comfortably several pixels.
- * Below this the outline stands in for the patch — see the `outline` layer.
+ * Below this the outline stands in for the patch — see the `outline` role, and `FeatureStyle.mark`.
  */
 const SCALE_SPLIT_ZOOM = 11;
 
 export const sourceId = (domainId: string) => `trace-${domainId}`;
-
-/**
- * A `match` over `change_type`, evaluated by calling `styleFor` for each case.
- *
- * Building the expression from the function — rather than restating its output — is what stops
- * the map's colours and the app's colour rule from drifting apart.
- */
-function styleExpression(entry: DomainManifestEntry, channel: 'color' | 'stroke') {
-  return [
-    'match',
-    ['get', 'change_type'],
-    ...CHANGE_TYPES.flatMap((changeType) => [changeType, styleFor(entry.hue, changeType)[channel]]),
-    styleFor(entry.hue, 'stable')[channel],
-  ];
-}
 
 /**
  * The years a domain's layers are split across — one *cohort* per year of its coverage.
@@ -80,9 +64,10 @@ export function cohortYears(entry: DomainManifestEntry): number[] {
  *
  * **Precondition: features are open-ended.** A cohort is switched on for every year at or after
  * its own and never switched off again, so a feature that *stops* being true — a non-null
- * `valid_to` — would keep drawing past its end. Every feature the pipeline emits today carries
- * `valid_to: null`, so this holds; a domain that starts emitting one needs this revisited rather
- * than merely re-run.
+ * `valid_to` — keeps drawing past its end. Forest holds to this. Water does **not**: JRC's `lost *`
+ * and `ephemeral *` transition classes carry a real `valid_to`, and roughly 42k water features are
+ * therefore drawn for years in which they no longer existed. Tracked as T-024; the fix is a second
+ * cohort axis, which is a change to this function and not to any caller of it.
  */
 function cohortFilter(
   entry: DomainManifestEntry,
@@ -97,17 +82,16 @@ function cohortFilter(
   return ['all', begins, test] as FilterSpecification;
 }
 
-/** `change_type` tests, named because they are the difference between the two views. */
-const IS_EXTENT: FilterSpecification = ['==', ['get', 'change_type'], 'extent'];
-const IS_NOT_EXTENT: FilterSpecification = ['!=', ['get', 'change_type'], 'extent'];
-const IS_LOSS: FilterSpecification = ['==', ['get', 'change_type'], 'loss'];
+/** Selects exactly one change type. Every role filters on one of these. */
+const isType = (changeType: ChangeType): FilterSpecification =>
+  ['==', ['get', 'change_type'], changeType] as FilterSpecification;
 
 /**
  * The width ramp that keeps a sub-pixel patch visible.
  *
  * Shared by every line layer here because the problem is shared: below `SCALE_SPLIT_ZOOM` the
  * patches are smaller than a pixel, whether they are being drawn as loss or subtracted from an
- * extent, and a fill cannot render either. See `ROLES.outline` for the full reasoning.
+ * extent, and a fill cannot render either. See `outlineRole` for the full reasoning.
  */
 const MARK_WIDTH = [
   'interpolate',
@@ -123,140 +107,200 @@ const MARK_WIDTH = [
   1.2,
 ] as unknown as number;
 
+/** What a role's `paint(entry)` returns: enough to derive its opacity channel and draw it. */
+type BuiltRole = { type: 'fill' | 'line'; paint: Record<string, unknown> };
+
 /**
- * Every layer a domain owns, declared once.
+ * One layer a domain owns, before it is split into cohorts.
  *
- * This table is the single source for all four things the app needs to know about a layer: its
- * id, which view shows it, what it filters on, and how it paints. They used to be four
- * hand-maintained lists, and only one pairing of them was defended — forgetting a layer in the
- * visibility list produced a layer that was built and filtered correctly but never shown, with
- * nothing to say so. Deriving all four from one table makes that inconsistency unrepresentable.
- *
- * Array order is draw order, and it is load-bearing: the cleared patches are painted *over* the
- * extent to cut holes in it, so they must follow it.
+ * `changeType` is which *toggle* shows this layer, which is not always the change type it filters
+ * on — the cleared patches filter on `loss` but are shown by the extent toggle. See `rolesFor`.
  */
-const ROLES = [
-  {
-    key: 'extent-fill',
-    mode: 'extent',
-    test: IS_EXTENT,
-    // The baseline mass the holes are cut from. More opaque than the change view's fill, which
-    // is an accumulation rather than a ground state.
-    paint: (entry: DomainManifestEntry) => ({
-      type: 'fill' as const,
-      paint: {
-        'fill-color': styleFor(entry.hue, 'extent').color,
-        'fill-opacity': 0.85,
-      },
-    }),
-  },
-  {
-    key: 'extent-outline',
-    mode: 'extent',
-    test: IS_EXTENT,
-    // Same two jobs as `outline`: the mark itself while the blocks are sub-pixel, an edge once
-    // they are not. Without the step the outline would be the fill's own colour at high zoom and
-    // adjacent blocks would be indistinguishable — including the ones the extraction grid split.
-    paint: (entry: DomainManifestEntry) => ({
-      type: 'line' as const,
-      paint: {
-        'line-color': [
-          'step',
-          ['zoom'],
-          styleFor(entry.hue, 'extent').color,
-          SCALE_SPLIT_ZOOM,
-          styleFor(entry.hue, 'extent').stroke,
-        ] as unknown as string,
-        'line-width': MARK_WIDTH,
-        'line-opacity': 0.85,
-      },
-    }),
-  },
-  {
-    key: 'cleared-fill',
-    mode: 'extent',
-    test: IS_LOSS,
-    // Opaque on purpose: this is subtraction done with paint, because MapLibre fills cannot
-    // subtract. See CLEARED for why it is the colour it is.
-    paint: () => ({
-      type: 'fill' as const,
-      paint: { 'fill-color': CLEARED, 'fill-opacity': 1 },
-    }),
-  },
-  {
-    key: 'cleared-outline',
-    mode: 'extent',
-    test: IS_LOSS,
-    // Without this the extent view would look static at island view: the holes are the same
-    // sub-pixel patches as the loss layer, so at z8 a fill alone cuts nothing visible and the
-    // green mass would appear not to change as the years pass.
-    paint: () => ({
-      type: 'line' as const,
-      paint: { 'line-color': CLEARED, 'line-width': MARK_WIDTH, 'line-opacity': 1 },
-    }),
-  },
-  {
-    key: 'fill',
-    mode: 'change',
-    test: IS_NOT_EXTENT,
-    paint: (entry: DomainManifestEntry) => ({
-      type: 'fill' as const,
-      paint: {
-        'fill-color': styleExpression(entry, 'color') as unknown as string,
-        // Kept below 1 so overlapping years read as accumulation rather than a flat mass.
-        'fill-opacity': 0.75,
-      },
-    }),
-  },
-  {
-    key: 'hatch',
-    mode: 'change',
-    test: IS_LOSS,
-    // A second fill carrying only the pattern. fill-pattern would replace fill-color on a single
-    // layer, and the rule is that loss is signalled by colour *and* texture, never either alone.
-    paint: () => ({
-      type: 'fill' as const,
-      paint: { 'fill-pattern': HATCH_IMAGE, 'fill-opacity': 0.9 },
-    }),
-  },
-  {
-    key: 'outline',
-    mode: 'change',
-    test: IS_NOT_EXTENT,
-    paint: (entry: DomainManifestEntry) => ({
-      type: 'line' as const,
-      paint: {
-        // Two jobs, split at the zoom where the fill becomes legible.
-        //
-        // A 30 m patch is *sub-pixel* below about z11 — at z8 a typical one is a quarter of a
-        // pixel across, and 17% of them collapse to zero area when quantised onto the tile grid.
-        // A fill cannot draw that, so below the split this line *is* the mark and carries the
-        // fill colour. Above it, the fill takes over and the line goes back to being an edge.
-        'line-color': [
-          'step',
-          ['zoom'],
-          styleExpression(entry, 'color'),
-          SCALE_SPLIT_ZOOM,
-          styleExpression(entry, 'stroke'),
-        ] as unknown as string,
-        // Wide enough to see at island view, then hairline once the fill is doing the work.
-        //
-        // This deliberately overstates area at low zoom: a mark you can see is bigger than the
-        // ground it stands for. That is a legibility floor, not a measurement — the honest
-        // alternative is not a truer dot, it is a blank map, which reads as "no loss here". Areas
-        // are only ever quoted from the feature's own `metric`, never inferred from mark size.
-        'line-width': MARK_WIDTH,
-        'line-opacity': 0.85,
-      },
-    }),
-  },
-] as const;
+interface Role {
+  key: string;
+  changeType: ChangeType;
+  test: FilterSpecification;
+  paint: (entry: DomainManifestEntry) => BuiltRole;
+}
+
+/**
+ * The line that carries a state, at both of the two jobs it has.
+ *
+ * A 30 m patch is *sub-pixel* below about z11 — at z8 a typical one is a quarter of a pixel across,
+ * and 17% of them collapse to zero area when quantised onto the tile grid. A fill cannot draw that,
+ * so below the split this line *is* the mark and takes `style.mark`. Above it the fill takes over
+ * and the line goes back to being an edge, in `style.stroke`. Without the step the outline would be
+ * the fill's own colour at high zoom and adjacent patches would be indistinguishable — including
+ * the ones the extraction grid split.
+ *
+ * The width deliberately overstates area at low zoom: a mark you can see is bigger than the ground
+ * it stands for. That is a legibility floor, not a measurement — the honest alternative is not a
+ * truer dot, it is a blank map, which reads as "no change here". Areas are only ever quoted from
+ * the feature's own `metric`, never inferred from mark size.
+ */
+function outlineRole(key: string, changeType: ChangeType, test: FilterSpecification): Role {
+  return {
+    key,
+    changeType,
+    test,
+    paint: (entry) => {
+      const style = styleFor(entry.hue, changeType);
+      return {
+        type: 'line' as const,
+        paint: {
+          'line-color': [
+            'step',
+            ['zoom'],
+            style.mark,
+            SCALE_SPLIT_ZOOM,
+            style.stroke,
+          ] as unknown as string,
+          'line-width': MARK_WIDTH,
+          'line-opacity': 0.85,
+        },
+      };
+    },
+  };
+}
+
+/**
+ * The layers one non-extent state owns: its fill, its pattern if it has one, its outline.
+ *
+ * Every colour here is a **constant**. It used to be a `match` over `change_type` shared by all
+ * three states at once, which meant one data-driven paint property survived in the hot path — the
+ * exact class of style that forces MapLibre to re-read tile data. Splitting the states into their
+ * own layers is what the toggles needed anyway, and it takes the last expression out of the paint.
+ */
+function stateRoles(entry: DomainManifestEntry, changeType: ChangeType): Role[] {
+  const test = isType(changeType);
+  const style = styleFor(entry.hue, changeType);
+
+  const roles: Role[] = [
+    {
+      key: `fill-${changeType}`,
+      changeType,
+      test,
+      paint: (e) => ({
+        type: 'fill' as const,
+        paint: {
+          'fill-color': styleFor(e.hue, changeType).color,
+          // Kept below 1 so overlapping years read as accumulation rather than a flat mass.
+          'fill-opacity': 0.75,
+        },
+      }),
+    },
+  ];
+
+  if (style.pattern) {
+    roles.push({
+      key: `pattern-${changeType}`,
+      changeType,
+      test,
+      // A second fill carrying only the pattern. fill-pattern would replace fill-color on a single
+      // layer, and the rule is that loss is signalled by colour *and* texture, never either alone.
+      paint: () => ({
+        type: 'fill' as const,
+        paint: { 'fill-pattern': HATCH_IMAGE, 'fill-opacity': 0.9 },
+      }),
+    });
+  }
+
+  roles.push(outlineRole(`outline-${changeType}`, changeType, test));
+  return roles;
+}
+
+/**
+ * Every layer this particular domain owns, derived from what its tileset actually contains.
+ *
+ * This used to be a fixed table of seven roles tagged with one of two mutually exclusive views, and
+ * both halves of that were wrong. The views were exclusive where they should have been additive —
+ * forest could show its canopy or its losses but never both, which is the one comparison the map
+ * exists to make. And the table was fixed, so water built `extent-*` and `cleared-*` cohorts for an
+ * extent it does not have: 4 roles across 38 years, 152 layers that could never match a feature.
+ *
+ * Now a role exists only if the manifest says the domain has something to put in it, and each role
+ * names the change type whose toggle shows it. Array order is draw order, and it is load-bearing
+ * twice over: the cleared patches are painted *over* the extent to cut holes in it, so they must
+ * follow it; and the states run in `CHANGE_TYPE_ORDER` so loss lands on top of whatever it happened
+ * to.
+ */
+function buildRoles(entry: DomainManifestEntry): Role[] {
+  const present = new Set(entry.changeTypes ?? []);
+  const roles: Role[] = [];
+
+  if (present.has('extent')) {
+    // The baseline mass the holes are cut from. More opaque than a change fill, which is an
+    // accumulation rather than a ground state.
+    roles.push({
+      key: 'extent-fill',
+      changeType: 'extent',
+      test: isType('extent'),
+      paint: (e) => ({
+        type: 'fill' as const,
+        paint: { 'fill-color': styleFor(e.hue, 'extent').color, 'fill-opacity': 0.85 },
+      }),
+    });
+    roles.push(outlineRole('extent-outline', 'extent', isType('extent')));
+
+    // Subtraction done with paint, because MapLibre fills cannot subtract. Filters on `loss` but is
+    // shown by the *extent* toggle: taking out what has gone is part of drawing a baseline
+    // honestly, not an overlay the reader opts into. An extent shown without its holes would claim
+    // the 2000 canopy is still standing.
+    if (present.has('loss')) {
+      roles.push({
+        key: 'cleared-fill',
+        changeType: 'extent',
+        test: isType('loss'),
+        // Opaque on purpose. See CLEARED for why it is the colour it is.
+        paint: () => ({
+          type: 'fill' as const,
+          paint: { 'fill-color': CLEARED, 'fill-opacity': 1 },
+        }),
+      });
+      roles.push({
+        key: 'cleared-outline',
+        changeType: 'extent',
+        test: isType('loss'),
+        // Without this the extent would look static at island view: the holes are the same
+        // sub-pixel patches as the loss layer, so at z8 a fill alone cuts nothing visible and the
+        // mass would appear not to change as the years pass.
+        paint: () => ({
+          type: 'line' as const,
+          paint: { 'line-color': CLEARED, 'line-width': MARK_WIDTH, 'line-opacity': 1 },
+        }),
+      });
+    }
+  }
+
+  for (const changeType of CHANGE_TYPE_ORDER) {
+    if (changeType === 'extent') continue;
+    if (!present.has(changeType)) continue;
+    roles.push(...stateRoles(entry, changeType));
+  }
+
+  return roles;
+}
+
+/**
+ * `buildRoles(entry)`, cached per manifest entry.
+ *
+ * `opacityUpdatesFor` walks this on every single year commit, and rebuilding the table each time
+ * would mean re-deriving every role — and calling into `styleFor` for each — on every tick of
+ * playback. Keyed on the `entry` object for the same reason as `builtCache` below.
+ */
+const rolesCache = new WeakMap<DomainManifestEntry, Role[]>();
+
+function rolesFor(entry: DomainManifestEntry): Role[] {
+  let roles = rolesCache.get(entry);
+  if (!roles) {
+    roles = buildRoles(entry);
+    rolesCache.set(entry, roles);
+  }
+  return roles;
+}
 
 const cohortLayerId = (domainId: string, key: string, cohort: number) =>
   `trace-${domainId}-${key}-${cohort}`;
-
-/** What a role's `paint(entry)` returns: enough to derive its opacity channel and draw it. */
-type BuiltRole = { type: 'fill' | 'line'; paint: Record<string, unknown> };
 
 /**
  * The opacity channel a role is animated through, and the value it holds when shown.
@@ -283,11 +327,11 @@ export function opacityChannel(built: BuiltRole): {
 /**
  * `role.paint(entry)`, cached per domain/role.
  *
- * It rebuilds the whole style-expression object — `match`/`step` arrays, several calls into
- * `styleFor` — every time it runs, but is only ever asked for the same handful of (entry, role)
- * pairs, and their output never changes for the life of a manifest. `opacityUpdatesFor` calls this
- * once per role on every single year commit, so leaving it uncached meant reconstructing every
- * role's full paint object on every tick of playback just to read back one constant.
+ * It rebuilds the whole style object — a `step` array, several calls into `styleFor` — every time
+ * it runs, but is only ever asked for the same handful of (entry, role) pairs, and their output
+ * never changes for the life of a manifest. `opacityUpdatesFor` calls this once per role on every
+ * single year commit, so leaving it uncached meant reconstructing every role's full paint object on
+ * every tick of playback just to read back one constant.
  *
  * Keyed on the `entry` object itself, not `entry.id`: a manifest that is ever replaced hands every
  * domain a fresh entry object, so the old one's cache entries simply become unreachable rather than
@@ -295,7 +339,7 @@ export function opacityChannel(built: BuiltRole): {
  */
 const builtCache = new WeakMap<DomainManifestEntry, Map<string, BuiltRole>>();
 
-function builtFor(entry: DomainManifestEntry, role: (typeof ROLES)[number]): BuiltRole {
+function builtFor(entry: DomainManifestEntry, role: Role): BuiltRole {
   let perEntry = builtCache.get(entry);
   if (!perEntry) {
     perEntry = new Map();
@@ -312,20 +356,30 @@ function builtFor(entry: DomainManifestEntry, role: (typeof ROLES)[number]): Bui
 /**
  * All layer ids a domain owns, in draw order. Used for teardown.
  *
- * Both views' layers are built once and switched with `visibility` rather than added and removed,
- * so that flipping the toggle never refetches a tile.
+ * Every change type's layers are built once and switched with `visibility` rather than added and
+ * removed, so that flipping a toggle never refetches a tile.
  */
 export function layerIdsFor(entry: DomainManifestEntry): string[] {
-  return ROLES.flatMap((role) =>
+  return rolesFor(entry).flatMap((role) =>
     cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
   );
 }
 
-/** Which view each layer belongs to. Drives the visibility switch in `useDomainLayers`. */
-export function layerIdsForMode(entry: DomainManifestEntry, mode: ViewMode): string[] {
-  return ROLES.filter((role) => role.mode === mode).flatMap((role) =>
-    cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
-  );
+/**
+ * The layers the reader has asked to see. Drives the visibility switch in `useDomainLayers`.
+ *
+ * A role is shown when *its* change type is selected, which for the cleared patches is `extent` and
+ * not the `loss` they filter on — see `buildRoles`.
+ */
+export function layerIdsForSelection(
+  entry: DomainManifestEntry,
+  selected: ReadonlySet<ChangeType>,
+): string[] {
+  return rolesFor(entry)
+    .filter((role) => selected.has(role.changeType))
+    .flatMap((role) =>
+      cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
+    );
 }
 
 /**
@@ -335,9 +389,12 @@ export function layerIdsForMode(entry: DomainManifestEntry, mode: ViewMode): str
  * from a later year is still *there*, drawn at zero opacity, and `queryRenderedFeatures` reads
  * geometry rather than paint: querying the lot would let the reader click a patch of loss that
  * has not happened yet and open a readout describing it.
+ *
+ * De-selected change types need no filtering here — their layers are `visibility: none`, which
+ * `queryRenderedFeatures` skips outright.
  */
 export function layerIdsForYear(entry: DomainManifestEntry, year: number): string[] {
-  return ROLES.flatMap((role) =>
+  return rolesFor(entry).flatMap((role) =>
     cohortYears(entry)
       .filter((cohort) => cohort <= year)
       .map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
@@ -355,7 +412,7 @@ export function opacityUpdatesFor(
   entry: DomainManifestEntry,
   year: number,
 ): [string, string, number][] {
-  return ROLES.flatMap((role) => {
+  return rolesFor(entry).flatMap((role) => {
     const { key, shown } = opacityChannel(builtFor(entry, role));
 
     return cohortYears(entry).map(
@@ -375,18 +432,24 @@ export interface DomainLayers {
   layers: (FillLayerSpecification | LineLayerSpecification)[];
 }
 
-export function layersFor(entry: DomainManifestEntry, year: number, mode: ViewMode): DomainLayers {
+export function layersFor(
+  entry: DomainManifestEntry,
+  year: number,
+  selected: ReadonlySet<ChangeType>,
+): DomainLayers {
   const source = sourceId(entry.id);
 
   // Built by walking the same table that produces the ids, the opacities and the visibility sets,
   // in the same order. There is no second list to fall out of step with.
   //
-  // Roles are the outer loop and cohorts the inner one, which keeps `ROLES` order — and with it
-  // the rule that cleared patches are painted over the extent they cut holes in. Interleaving the
-  // two would scatter each role's cohorts through the draw order and lose that.
-  const layers = ROLES.flatMap((role) => {
+  // Roles are the outer loop and cohorts the inner one, which keeps the role order — and with it
+  // the rule that cleared patches are painted over the extent they cut holes in, and that loss is
+  // drawn last. Interleaving the two would scatter each role's cohorts through the draw order and
+  // lose that.
+  const layers = rolesFor(entry).flatMap((role) => {
     const built = builtFor(entry, role);
     const { key, shown } = opacityChannel(built);
+    const visibility = selected.has(role.changeType) ? 'visible' : 'none';
 
     return cohortYears(entry).map(
       (cohort) =>
@@ -396,7 +459,7 @@ export function layersFor(entry: DomainManifestEntry, year: number, mode: ViewMo
           source,
           'source-layer': entry.tiles.sourceLayer,
           filter: cohortFilter(entry, cohort, role.test),
-          layout: { visibility: role.mode === mode ? 'visible' : 'none' },
+          layout: { visibility },
           paint: {
             ...built.paint,
             [key]: cohort <= year ? shown : 0,
