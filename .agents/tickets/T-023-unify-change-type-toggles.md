@@ -16,21 +16,21 @@ colour ramp so hue always names the domain.
 contract is unchanged — `changeTypes` is already measured and emitted; version stays 1.
 
 **Acceptance criteria:**
-- [ ] Each domain shows one toggle per entry in its measured `changeTypes`, multi-select, iterated
+- [x] Each domain shows one toggle per entry in its measured `changeTypes`, multi-select, iterated
       from the manifest. No domain id appears in any component.
-- [ ] `ViewMode` and `supportsExtentView` are gone; nothing imports them.
-- [ ] `styleFor(hue, changeType)` returns `{ color, mark, stroke, pattern }` and contains no colour
+- [x] `ViewMode` and `supportsExtentView` are gone; nothing imports them.
+- [x] `styleFor(hue, changeType)` returns `{ color, mark, stroke, pattern }` and contains no colour
       that is shared between two different hues — every state is a transform of the domain's own hue.
       `loss.pattern === 'hatch'` still holds (A5).
-- [ ] `loss.mark` and `loss.stroke` are lighter than `loss.color`, so a sub-pixel loss patch is
+- [x] `loss.mark` and `loss.stroke` are lighter than `loss.color`, so a sub-pixel loss patch is
       visible against the near-black basemap at island zoom.
-- [ ] Layer roles are derived from `entry.changeTypes`: a domain without `extent` builds no
+- [x] Layer roles are derived from `entry.changeTypes`: a domain without `extent` builds no
       `extent-*` or `cleared-*` layers. `cleared-*` is gated by the extent toggle, not the loss one.
-- [ ] No `fill-color` or `line-color` is a `match` expression — every paint colour is a constant.
-- [ ] Every domain and every change type is on at first load; un-checking a domain's last change
+- [x] No `fill-color` or `line-color` is a `match` expression — every paint colour is a constant.
+- [x] Every domain and every change type is on at first load; un-checking a domain's last change
       type switches the domain off.
-- [ ] Each toggle carries a swatch drawn from `styleFor`, so the control doubles as the legend.
-- [ ] `CLAUDE.md`'s "Colour is a pure function" section describes the ramp, not the shared red.
+- [x] Each toggle carries a swatch drawn from `styleFor`, so the control doubles as the legend.
+- [x] `CLAUDE.md`'s "Colour is a pure function" section describes the ramp, not the shared red.
 
 **Verify:** `cd web && npm run typecheck && npm test && npx prettier --check .`
 **Owner:** claude
