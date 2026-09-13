@@ -209,6 +209,35 @@ WATER_SOURCE_RETAINED_PCT: Final[float] = 75.5
 # next full run -- and whenever MASK_ON_MANAGED_LAND changes, since that moves the denominator.
 WATER_LOST_PERMANENT_PCT: Final[float] = 3.5
 
+# Share of the layer's *loss* area that carries the first year of the record -- 24,477 of
+# 34,512 ha: the whole of JRC's `lost permanent` (3), `lost seasonal` (6) and `permanent to
+# seasonal` (8), every feature of which is dated to the record's start.
+#
+# Quoted because of what those three classes do to the opening frame. All three are in
+# water.PRESENT_AT_START, so derive_valid_from gives each of them the range's first year, and the
+# web app's cohorts switch a feature on at valid_from and then accumulate. The timeline therefore
+# starts with 71% of the layer's loss already painted, and a reader takes that for something that
+# happened in the first year -- the question that raised T-025 was whether the map was comparing
+# the record's first year against the one before it. It is not. The class is a single verdict over
+# the whole record, and the date is only the earliest year the water can honestly be said to have
+# existed; the two are independent, and drawing them together says something neither one does.
+#
+# It reads as a coastline because of where those classes sit rather than anything about the coast:
+# gridded at 0.1 degree the mass is the west-coast strip, 濁水溪 mouth 65% of its cell and 大肚溪
+# 68%, then the 嘉義/台南 aquaculture belt -- tidal flats, river mouths and fish ponds, which is
+# what seasonal-grade water is. Mountain reservoirs are class 1 and stay out of it.
+#
+# A share of LOSS area, not of the layer. The same hectares are 24.1% of the layer's 101,567 ha,
+# and quoting that would understate what the frame shows by a factor of three -- the same failure
+# WATER_LOST_PERMANENT_PCT exists to prevent, pointed the other way.
+#
+# The remaining 29% of loss is the two `ephemeral *` classes. Those are not present at the start,
+# do get a measured onset, and so arrive across the record as they should.
+#
+# Re-measure whenever water.CHANGE_TYPE_BY_TRANSITION or water.PRESENT_AT_START changes -- either
+# moves the numerator -- and whenever MASK_ON_MANAGED_LAND changes, which moves both ends.
+WATER_LOSS_DATED_AT_START_PCT: Final[float] = 70.9
+
 # Share of JRC's classed water area removed by the managed-land rule
 # (water.MASK_ON_MANAGED_LAND): 4.7% on built-up ground plus 7.8% on cropland.
 #
