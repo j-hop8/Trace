@@ -48,7 +48,7 @@
       "additionalProperties": true,
       "properties": {
         "domain": {
-          "description": "Which subject this feature belongs to. Drives the extent hue.",
+          "description": "Which subject this feature belongs to. Drives the cover hue.",
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
@@ -58,21 +58,24 @@
         },
 
         "valid_from": {
-          "description": "Year the state begins. An integer year, not a date: every v1 source is annual, and the time slider filters on this numerically — `[\"<=\", [\"get\", \"valid_from\"], year]`. A date string would break that expression and imply precision the 30 m annual sources do not have.",
+          "description": "Year the state begins. An integer year, not a date: every v1 source is annual. A date string would imply precision the 30 m annual sources do not have.",
           "type": "integer",
           "minimum": 1500,
           "maximum": 2100
         },
         "valid_to": {
-          "description": "Year the state ends. null means the state is current — it has not ended as of the source's last observed year.",
+          "description": "The first year the state no longer holds — half-open. null means open-ended: the state is current as of the source's last observed year.",
+          "$comment": "Change-kind features must carry null; this is enforced in code because JSON Schema cannot condition on x-kind.",
           "type": ["integer", "null"],
           "minimum": 1500,
           "maximum": 2100
         },
 
         "change_type": {
-          "description": "The universal change signal. Rendering colour is a pure function of (domain, change_type): extent uses the domain hue, loss uses the cross-domain red/amber. `extent` is the odd one out — it is not a change but the baseline state the changes are measured against, and it is what lets a domain answer \"how much is left\" as well as \"what moved\".",
-          "enum": ["extent", "gain", "loss", "stable"]
+          "description": "The universal state signal has two kinds: cover is the baseline state, while stable, gain, and loss are accumulated changes. Rendering colour is a pure function of (domain hue, change_type): every state is a transform of its domain's hue via styleFor(hue, change_type).",
+          "enum": ["cover", "gain", "loss", "stable"],
+          "x-kind": { "cover": "cover", "gain": "change", "loss": "change", "stable": "change" },
+          "$comment": "Cover carries its own validity; change accumulates and never closes; valid_to is half-open."
         },
 
         "metric": {
@@ -114,7 +117,7 @@
             "properties": {
               "valid_to": { "minimum": 1500 }
             },
-            "$comment": "Ordering (valid_to >= valid_from) is enforced in code; JSON Schema cannot compare two sibling values."
+            "$comment": "Ordering (valid_to > valid_from) is enforced in code; JSON Schema cannot compare two sibling values."
           }
         }
       ]

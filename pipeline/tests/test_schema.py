@@ -6,7 +6,9 @@ in-memory dict cannot (a null that became a string, an int that became a float).
 """
 
 import json
+import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -83,7 +85,7 @@ def test_error_names_the_offending_feature_index():
 def test_reversed_dates_message_explains_the_rule():
     with pytest.raises(schema.FeatureValidationError) as excinfo:
         schema.validate(load("invalid_reversed_dates"))
-    assert "cannot end before it begins" in str(excinfo.value)
+    assert "empty interval" in str(excinfo.value)
 
 
 def test_all_problems_are_collected_not_just_the_first():
@@ -97,6 +99,7 @@ def test_all_problems_are_collected_not_just_the_first():
 def test_long_problem_lists_are_truncated_in_the_message():
     """Printing 40k errors helps nobody; the count still has to be honest."""
     one = load("invalid_empty_metric")["features"][0]
+    one["properties"]["valid_to"] = None
     collection = schema.feature_collection([json.loads(json.dumps(one)) for _ in range(40)])
 
     with pytest.raises(schema.FeatureValidationError) as excinfo:
@@ -130,7 +133,7 @@ def make_props(**overrides):
         "domain": "water",
         "valid_from": 1984,
         "valid_to": 2008,
-        "change_type": "loss",
+        "change_type": "cover",
         "metric": {"area_ha": 3.2},
         "source": "JRC/GSW1_4/YearlyHistory",
         "method": "JRC GSW YearlyHistory",
@@ -157,7 +160,7 @@ def test_dataclass_round_trips_through_validation():
 
 def test_dataclass_rejects_reversed_dates_at_construction():
     """Failing here points the traceback at the extraction code that built it."""
-    with pytest.raises(schema.FeatureValidationError, match="cannot end before it begins"):
+    with pytest.raises(schema.FeatureValidationError, match="empty interval"):
         make_feature(valid_from=2008, valid_to=1990)
 
 
@@ -195,9 +198,19 @@ def test_open_ended_state_is_allowed():
     assert feature.properties()["valid_to"] is None
 
 
-def test_same_year_start_and_end_is_allowed():
-    """A pond present for a single year is real data, not an error."""
-    assert make_feature(valid_from=1995, valid_to=1995).properties()["valid_to"] == 1995
+def test_same_year_start_and_end_is_an_empty_interval():
+    with pytest.raises(schema.FeatureValidationError, match="empty interval"):
+        make_feature(valid_from=1995, valid_to=1995)
+
+    assert make_feature(valid_from=1995, valid_to=1996).properties()["valid_to"] == 1996
+
+
+def test_change_kind_cannot_close_but_cover_can():
+    with pytest.raises(schema.FeatureValidationError, match="change-kind feature cannot close"):
+        make_feature(change_type="loss", valid_to=2010)
+
+    assert make_feature(change_type="loss", valid_to=None).properties()["valid_to"] is None
+    assert make_feature(change_type="cover", valid_to=2010).properties()["valid_to"] == 2010
 
 
 def test_subtype_is_omitted_when_absent_rather_than_null():
@@ -266,8 +279,17 @@ def test_change_type_values_match_the_typescript_union():
     ts_source = (schema.REPO_ROOT / "web" / "src" / "types" / "feature.ts").read_text(
         encoding="utf-8"
     )
-    for value in schema.load_schema()["$defs"]["properties"]["properties"]["change_type"]["enum"]:
-        assert f"'{value}'" in ts_source, f"ChangeType in the TS mirror is missing {value!r}"
+    change_type = schema.load_schema()["$defs"]["properties"]["properties"]["change_type"]
+    schema_values = set(change_type["enum"])
+    schema_kinds = change_type["x-kind"]
+    union = re.findall(r"export type ChangeType = ([^;]+);", ts_source)[0]
+    ts_values = set(union.replace("'", "").replace(" ", "").split("|"))
+    ts_kinds = dict(re.findall(r"(\w+):\s*'(cover|change)'", ts_source))
+
+    python_values = set(get_args(schema.ChangeType))
+
+    assert schema_values == set(schema_kinds) == python_values == ts_values == set(ts_kinds)
+    assert all(schema_kinds[value] == ts_kinds[value] for value in schema_values)
 
 
 # --- the manifest -------------------------------------------------------------------------------

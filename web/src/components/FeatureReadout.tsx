@@ -20,7 +20,7 @@ function formatArea(hectares: number | undefined): string | null {
 /**
  * Whether this feature's `area_ha` describes a real thing, or an artefact of how it was cut.
  *
- * Extent blocks are vectorised over a spatial grid (see `EXTENT_GRID` in the forest pipeline), so
+ * Cover blocks are vectorised over a spatial grid (see `EXTENT_GRID` in the forest pipeline), so
  * a block straddling a cell edge comes back as two features and its area is the piece inside that
  * cell. The number is a true geodesic area of the polygon, but the polygon's boundary is partly an
  * extraction detail — quoting it as "this forest: 198,830 ha" states a fact about the chunking as
@@ -28,7 +28,7 @@ function formatArea(hectares: number | undefined): string | null {
  * the boundaries of the thing that was lost.
  */
 function areaIsMeaningful(props: TraceFeatureProperties): boolean {
-  return props.change_type !== 'extent';
+  return props.change_type !== 'cover';
 }
 
 /** The one-line story: what this is, when it changed, and by how much. */
@@ -43,10 +43,10 @@ function sentence(props: TraceFeatureProperties, area: string | null): string {
         : `lost in ${from}`
       : props.change_type === 'gain'
         ? `appeared in ${from}`
-        : // Extent is an observation of one year, not a claim about every year since. "Present
+        : // Cover is an observation of one year, not a claim about every year since. "Present
           // since 2000" would say this block is still standing, which is exactly what the loss
           // features exist to contradict.
-          props.change_type === 'extent'
+          props.change_type === 'cover'
           ? `mapped at the ${from} baseline`
           : to
             ? `present ${from}–${to}`

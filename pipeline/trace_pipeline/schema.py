@@ -24,7 +24,8 @@ import jsonschema
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "schema" / "feature.schema.json"
 
-ChangeType = Literal["gain", "loss", "stable"]
+ChangeType = Literal["cover", "gain", "loss", "stable"]
+Kind = Literal["cover", "change"]
 
 #: How many individual problems to name before truncating. A malformed export can produce tens of
 #: thousands of identical errors; the first handful plus a count is what actually helps.
@@ -86,6 +87,12 @@ def required_property_names() -> list[str]:
     Read from the schema rather than restated here -- a copy would be one more thing to drift.
     """
     return list(load_schema()["$defs"]["properties"]["required"])
+
+
+@lru_cache(maxsize=1)
+def kind_of() -> dict[str, str]:
+    """The state kind for every change type, derived from the schema."""
+    return dict(load_schema()["$defs"]["properties"]["properties"]["change_type"]["x-kind"])
 
 
 @lru_cache(maxsize=1)
@@ -194,11 +201,19 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
 
     valid_from = props.get("valid_from")
     valid_to = props.get("valid_to")
-    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to < valid_from:
+    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to <= valid_from:
         problems.append(
-            f"{where}: valid_to ({valid_to}) is before valid_from ({valid_from}) -- "
-            f"a state cannot end before it begins"
+            f"{where}: valid_to ({valid_to}) is not after valid_from ({valid_from}) -- "
+            f"an empty interval is not a state"
         )
+
+    change_type = props.get("change_type")
+    if (
+        isinstance(change_type, str)
+        and kind_of().get(change_type) == "change"
+        and valid_to is not None
+    ):
+        problems.append(f"{where}: a change-kind feature cannot close (valid_to must be null)")
 
     return problems
 

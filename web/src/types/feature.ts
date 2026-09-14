@@ -9,20 +9,29 @@
 /**
  * The universal change signal, identical across every domain.
  *
- * `extent` is not a change: it is the baseline the changes are measured against, carried as a
+ * `cover` is not a change: it is the baseline the changes are measured against, carried as a
  * change_type so that one tileset per domain still holds everything the map draws.
  */
-export type ChangeType = 'extent' | 'gain' | 'loss' | 'stable';
+export type ChangeType = 'cover' | 'gain' | 'loss' | 'stable';
+
+/** The two kinds of state. Cover carries its own validity; change accumulates and never closes. */
+export type Kind = 'cover' | 'change';
+export const KIND_OF: Record<ChangeType, Kind> = {
+  cover: 'cover',
+  stable: 'change',
+  gain: 'change',
+  loss: 'change',
+};
 
 /**
  * Every change type, in the order they should be drawn and listed.
  *
  * Not the union's declaration order, which is alphabetical and meaningless on a map. This runs from
- * the ground state outward: the baseline first, then what stayed, then what arrived, then what went
+ * the ground state outward: cover first, then what stayed, then what arrived, then what went
  * — so `loss` is drawn last and sits on top of whatever it happened to, and a legend built by
  * walking this reads as a sentence rather than a set.
  */
-export const CHANGE_TYPE_ORDER: readonly ChangeType[] = ['extent', 'stable', 'gain', 'loss'];
+export const CHANGE_TYPE_ORDER: readonly ChangeType[] = ['cover', 'stable', 'gain', 'loss'];
 
 /**
  * A domain id. Deliberately `string` rather than a union of 'water' | 'forest': the web app

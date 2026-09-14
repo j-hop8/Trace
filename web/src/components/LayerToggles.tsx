@@ -7,14 +7,14 @@ import type { ChangeType } from '@/types/feature';
 /**
  * The states, labelled generically.
  *
- * No label names a subject: "覆蓋" is whatever the domain's extent is, so the same control reads
+ * No label names a subject: "覆蓋" is whatever the domain's cover is, so the same control reads
  * correctly for forest cover and for water surface without a per-domain string table — which would
  * put domain literals back into a component, and would also invite a *wrong* label. Water's
  * `stable` covers permanent and seasonal water both; calling it "permanent" because that is the
  * commonest class would quietly misdescribe a third of the layer.
  */
 const TYPE_LABELS: Record<ChangeType, { zh: string; gloss: string }> = {
-  extent: {
+  cover: {
     zh: '覆蓋',
     gloss: 'the baseline, with everything lost by the selected year taken out',
   },

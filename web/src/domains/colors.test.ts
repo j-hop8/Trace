@@ -72,9 +72,9 @@ describe('hue names the domain', () => {
     expect([...forest].filter((colour) => water.has(colour))).toEqual([]);
   });
 
-  it('draws an extent as the domain hue itself, untouched', () => {
-    expect(styleFor(FOREST, 'extent').color).toBe(FOREST);
-    expect(styleFor(WATER, 'extent').color).toBe(WATER);
+  it('draws a cover as the domain hue itself, untouched', () => {
+    expect(styleFor(FOREST, 'cover').color).toBe(FOREST);
+    expect(styleFor(WATER, 'cover').color).toBe(WATER);
   });
 });
 

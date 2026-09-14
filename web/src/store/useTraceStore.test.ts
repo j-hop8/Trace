@@ -95,7 +95,7 @@ const manifest = {
   domains: [
     {
       id: 'forest',
-      changeTypes: ['extent', 'loss'],
+      changeTypes: ['cover', 'loss'],
       temporal: { start: 2001, end: 2025 },
     },
     {
@@ -116,19 +116,19 @@ describe('selectedTypes', () => {
   it('opens with every state of every domain showing', () => {
     // The point of the map is the comparison, and a reader who has to switch the canopy on before
     // the losses have anything to be losses *of* has to already know what the map is for.
-    expect(typesOf('forest')).toEqual(['extent', 'loss']);
+    expect(typesOf('forest')).toEqual(['cover', 'loss']);
     expect(typesOf('water')).toEqual(['gain', 'loss', 'stable']);
   });
 
   it('seeds a domain only with states its tileset actually holds', () => {
     // Never a fixed list: water has no extent, so no extent control and no extent layers.
-    expect(typesOf('water')).not.toContain('extent');
+    expect(typesOf('water')).not.toContain('cover');
   });
 
   it('switches one state without touching the others', () => {
     // The whole reason for the change. The previous control could show forest's canopy or its
     // losses but never both, which is the one comparison the map exists to make.
-    useTraceStore.getState().toggleChangeType('forest', 'extent');
+    useTraceStore.getState().toggleChangeType('forest', 'cover');
 
     expect(typesOf('forest')).toEqual(['loss']);
     expect(useTraceStore.getState().activeDomains.has('forest')).toBe(true);
@@ -143,7 +143,7 @@ describe('selectedTypes', () => {
   it('switches the domain off when its last state is un-checked', () => {
     // A lit toggle over an empty map is indistinguishable from a layer with no data for the year.
     // Making the state unreachable beats inventing a third thing for the badge to say.
-    useTraceStore.getState().toggleChangeType('forest', 'extent');
+    useTraceStore.getState().toggleChangeType('forest', 'cover');
     useTraceStore.getState().toggleChangeType('forest', 'loss');
 
     expect(typesOf('forest')).toEqual([]);
@@ -153,18 +153,18 @@ describe('selectedTypes', () => {
   it('brings a domain back showing everything, however it went dark', () => {
     // Without this, a domain switched off from its state chips returns still holding the empty set
     // that switched it off — on, and drawing nothing.
-    useTraceStore.getState().toggleChangeType('forest', 'extent');
+    useTraceStore.getState().toggleChangeType('forest', 'cover');
     useTraceStore.getState().toggleChangeType('forest', 'loss');
 
     useTraceStore.getState().toggleDomain('forest');
 
-    expect(typesOf('forest')).toEqual(['extent', 'loss']);
+    expect(typesOf('forest')).toEqual(['cover', 'loss']);
   });
 
   it('stops claiming to load a domain its last state just closed', () => {
     useTraceStore.getState().setLoadingDomains(new Set(['forest', 'water']));
 
-    useTraceStore.getState().toggleChangeType('forest', 'extent');
+    useTraceStore.getState().toggleChangeType('forest', 'cover');
     useTraceStore.getState().toggleChangeType('forest', 'loss');
 
     expect(ids(useTraceStore.getState().loadingDomains)).toEqual(['water']);
@@ -189,7 +189,7 @@ describe('selectedTypes', () => {
     } as never;
     useTraceStore.getState().select(selected);
 
-    useTraceStore.getState().toggleChangeType('forest', 'extent');
+    useTraceStore.getState().toggleChangeType('forest', 'cover');
     useTraceStore.getState().toggleChangeType('water', 'gain');
 
     expect(useTraceStore.getState().selected).toBe(selected);

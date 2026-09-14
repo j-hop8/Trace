@@ -91,7 +91,7 @@ const isType = (changeType: ChangeType): FilterSpecification =>
  *
  * Shared by every line layer here because the problem is shared: below `SCALE_SPLIT_ZOOM` the
  * patches are smaller than a pixel, whether they are being drawn as loss or subtracted from an
- * extent, and a fill cannot render either. See `outlineRole` for the full reasoning.
+ * cover, and a fill cannot render either. See `outlineRole` for the full reasoning.
  */
 const MARK_WIDTH = [
   'interpolate',
@@ -114,7 +114,7 @@ type BuiltRole = { type: 'fill' | 'line'; paint: Record<string, unknown> };
  * One layer a domain owns, before it is split into cohorts.
  *
  * `changeType` is which *toggle* shows this layer, which is not always the change type it filters
- * on — the cleared patches filter on `loss` but are shown by the extent toggle. See `rolesFor`.
+ * on — the cleared patches filter on `loss` but are shown by the cover toggle. See `rolesFor`.
  */
 interface Role {
   key: string;
@@ -164,7 +164,7 @@ function outlineRole(key: string, changeType: ChangeType, test: FilterSpecificat
 }
 
 /**
- * The layers one non-extent state owns: its fill, its pattern if it has one, its outline.
+ * The layers one non-cover state owns: its fill, its pattern if it has one, its outline.
  *
  * Every colour here is a **constant**. It used to be a `match` over `change_type` shared by all
  * three states at once, which meant one data-driven paint property survived in the hot path — the
@@ -215,12 +215,12 @@ function stateRoles(entry: DomainManifestEntry, changeType: ChangeType): Role[] 
  * This used to be a fixed table of seven roles tagged with one of two mutually exclusive views, and
  * both halves of that were wrong. The views were exclusive where they should have been additive —
  * forest could show its canopy or its losses but never both, which is the one comparison the map
- * exists to make. And the table was fixed, so water built `extent-*` and `cleared-*` cohorts for an
- * extent it does not have: 4 roles across 38 years, 152 layers that could never match a feature.
+ * exists to make. And the table was fixed, so water built `cover-*` and `cleared-*` cohorts for a
+ * cover it does not have: 4 roles across 38 years, 152 layers that could never match a feature.
  *
  * Now a role exists only if the manifest says the domain has something to put in it, and each role
  * names the change type whose toggle shows it. Array order is draw order, and it is load-bearing
- * twice over: the cleared patches are painted *over* the extent to cut holes in it, so they must
+ * twice over: the cleared patches are painted *over* the cover to cut holes in it, so they must
  * follow it; and the states run in `CHANGE_TYPE_ORDER` so loss lands on top of whatever it happened
  * to.
  */
@@ -228,28 +228,28 @@ function buildRoles(entry: DomainManifestEntry): Role[] {
   const present = new Set(entry.changeTypes ?? []);
   const roles: Role[] = [];
 
-  if (present.has('extent')) {
+  if (present.has('cover')) {
     // The baseline mass the holes are cut from. More opaque than a change fill, which is an
     // accumulation rather than a ground state.
     roles.push({
-      key: 'extent-fill',
-      changeType: 'extent',
-      test: isType('extent'),
+      key: 'cover-fill',
+      changeType: 'cover',
+      test: isType('cover'),
       paint: (e) => ({
         type: 'fill' as const,
-        paint: { 'fill-color': styleFor(e.hue, 'extent').color, 'fill-opacity': 0.85 },
+        paint: { 'fill-color': styleFor(e.hue, 'cover').color, 'fill-opacity': 0.85 },
       }),
     });
-    roles.push(outlineRole('extent-outline', 'extent', isType('extent')));
+    roles.push(outlineRole('cover-outline', 'cover', isType('cover')));
 
     // Subtraction done with paint, because MapLibre fills cannot subtract. Filters on `loss` but is
-    // shown by the *extent* toggle: taking out what has gone is part of drawing a baseline
-    // honestly, not an overlay the reader opts into. An extent shown without its holes would claim
+    // shown by the *cover* toggle: taking out what has gone is part of drawing a baseline
+    // honestly, not an overlay the reader opts into. A cover shown without its holes would claim
     // the 2000 canopy is still standing.
     if (present.has('loss')) {
       roles.push({
         key: 'cleared-fill',
-        changeType: 'extent',
+        changeType: 'cover',
         test: isType('loss'),
         // Opaque on purpose. See CLEARED for why it is the colour it is.
         paint: () => ({
@@ -259,9 +259,9 @@ function buildRoles(entry: DomainManifestEntry): Role[] {
       });
       roles.push({
         key: 'cleared-outline',
-        changeType: 'extent',
+        changeType: 'cover',
         test: isType('loss'),
-        // Without this the extent would look static at island view: the holes are the same
+        // Without this the cover would look static at island view: the holes are the same
         // sub-pixel patches as the loss layer, so at z8 a fill alone cuts nothing visible and the
         // mass would appear not to change as the years pass.
         paint: () => ({
@@ -273,7 +273,7 @@ function buildRoles(entry: DomainManifestEntry): Role[] {
   }
 
   for (const changeType of CHANGE_TYPE_ORDER) {
-    if (changeType === 'extent') continue;
+    if (changeType === 'cover') continue;
     if (!present.has(changeType)) continue;
     roles.push(...stateRoles(entry, changeType));
   }
