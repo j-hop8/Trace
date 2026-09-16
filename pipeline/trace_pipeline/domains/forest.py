@@ -107,7 +107,7 @@ def build_extent_feature(geometry: dict[str, Any], area_ha: float) -> dict[str, 
         domain=ForestDomain.id,
         valid_from=config.HANSEN_BASELINE_YEAR,
         valid_to=None,
-        change_type="extent",
+        change_type="cover",
         metric={"area_ha": round(area_ha, 4)},
         source=config.HANSEN_ASSET,
         method=EXTENT_METHOD,
@@ -120,7 +120,7 @@ def build_extent_feature(geometry: dict[str, Any], area_ha: float) -> dict[str, 
 class ForestDomain(Domain):
     id = "forest"
     label = {"en": "Forest", "zh": "森林"}
-    change_types = ("extent", "loss")
+    change_types = ("cover", "loss")
 
     @property
     def source(self) -> SourceInfo:

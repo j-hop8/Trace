@@ -60,13 +60,21 @@ unsupported.
 [schema/feature.schema.json](schema/feature.schema.json). PostGIS is deferred to Phase 2, but the
 schema is not, so that migration stays a data load rather than a redesign.
 
+### Two kinds of state
+
+`cover` is the state that exists in year Y and carries its own half-open validity interval
+`[valid_from, valid_to)`; `valid_to` is the first year the state no longer holds, and `null` means
+open. `change` is a verdict accumulated since the record's first year, so `stable`, `gain`, and
+`loss` always carry `valid_to: null` and remain drawn in every later year. Water's change
+features do not yet satisfy this (see the cohort note above); T-031 re-dates them.
+
 ### Colour is a pure function, and hue means the domain
 
 `web/src/domains/colors.ts` exports one function, `styleFor(hue, changeType)`, returning
 `{ color, mark, stroke, pattern }`.
 
 **Every state is a transform of the domain's own hue — there is no cross-domain change colour.**
-Extent is the hue itself; `stable` is pulled toward the basemap's grey so it recedes; `gain` is
+Cover is the hue itself; `stable` is pulled toward the basemap's grey so it recedes; `gain` is
 lifted toward white; `loss` is the hue emptied almost to black. This replaced a rule where loss in
 every domain was one shared red, which reads correctly at two domains and stops scaling at six: a
 shared red says only that *something, somewhere* was lost, and the hue no longer says what. The

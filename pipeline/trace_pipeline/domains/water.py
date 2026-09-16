@@ -392,7 +392,7 @@ def build_feature(
         domain=WaterDomain.id,
         valid_from=derive_valid_from(transition_code, first_year, range_first),
         valid_to=derive_valid_to(transition_code, last_year, range_last),
-        change_type=derive_change_type(transition_code),  # type: ignore[arg-type]  -- validated against the schema, not the stale Literal
+        change_type=derive_change_type(transition_code),
         metric={"area_ha": round(area_ha, 4)},
         source=gsw_asset,
         method=METHOD,

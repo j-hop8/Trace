@@ -6,7 +6,9 @@ in-memory dict cannot (a null that became a string, an int that became a float).
 """
 
 import json
+import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -130,7 +132,7 @@ def make_props(**overrides):
         "domain": "water",
         "valid_from": 1984,
         "valid_to": 2008,
-        "change_type": "loss",
+        "change_type": "cover",
         "metric": {"area_ha": 3.2},
         "source": "JRC/GSW1_4/YearlyHistory",
         "method": "JRC GSW YearlyHistory",
@@ -196,8 +198,17 @@ def test_open_ended_state_is_allowed():
 
 
 def test_same_year_start_and_end_is_allowed():
-    """A pond present for a single year is real data, not an error."""
+    """valid_to is documented half-open, but equality is tolerated until T-031 re-dates water."""
     assert make_feature(valid_from=1995, valid_to=1995).properties()["valid_to"] == 1995
+
+
+def test_kind_of_matches_the_schema_taxonomy():
+    assert schema.kind_of() == {
+        "cover": "cover",
+        "gain": "change",
+        "loss": "change",
+        "stable": "change",
+    }
 
 
 def test_subtype_is_omitted_when_absent_rather_than_null():
@@ -266,8 +277,17 @@ def test_change_type_values_match_the_typescript_union():
     ts_source = (schema.REPO_ROOT / "web" / "src" / "types" / "feature.ts").read_text(
         encoding="utf-8"
     )
-    for value in schema.load_schema()["$defs"]["properties"]["properties"]["change_type"]["enum"]:
-        assert f"'{value}'" in ts_source, f"ChangeType in the TS mirror is missing {value!r}"
+    change_type = schema.load_schema()["$defs"]["properties"]["properties"]["change_type"]
+    schema_values = set(change_type["enum"])
+    schema_kinds = change_type["x-kind"]
+    union = re.findall(r"export type ChangeType = ([^;]+);", ts_source)[0]
+    ts_values = set(union.replace("'", "").replace(" ", "").split("|"))
+    ts_kinds = dict(re.findall(r"(\w+):\s*'(cover|change)'", ts_source))
+
+    python_values = set(get_args(schema.ChangeType))
+
+    assert schema_values == set(schema_kinds) == python_values == ts_values == set(ts_kinds)
+    assert all(schema_kinds[value] == ts_kinds[value] for value in schema_values)
 
 
 # --- the manifest -------------------------------------------------------------------------------

@@ -52,7 +52,7 @@ def test_every_documented_jrc_class_has_a_change_type():
 
 
 def test_change_types_are_all_in_the_schema_enum():
-    allowed = {"extent", "gain", "loss", "stable"}
+    allowed = set(schema.load_schema()["$defs"]["properties"]["properties"]["change_type"]["enum"])
     assert set(water.CHANGE_TYPE_BY_TRANSITION.values()) <= allowed
 
 

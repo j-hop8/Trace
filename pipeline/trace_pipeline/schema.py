@@ -24,7 +24,8 @@ import jsonschema
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "schema" / "feature.schema.json"
 
-ChangeType = Literal["gain", "loss", "stable"]
+ChangeType = Literal["cover", "gain", "loss", "stable"]
+Kind = Literal["cover", "change"]
 
 #: How many individual problems to name before truncating. A malformed export can produce tens of
 #: thousands of identical errors; the first handful plus a count is what actually helps.
@@ -86,6 +87,12 @@ def required_property_names() -> list[str]:
     Read from the schema rather than restated here -- a copy would be one more thing to drift.
     """
     return list(load_schema()["$defs"]["properties"]["required"])
+
+
+@lru_cache(maxsize=1)
+def kind_of() -> dict[str, str]:
+    """The state kind for every change type, derived from the schema."""
+    return dict(load_schema()["$defs"]["properties"]["properties"]["change_type"]["x-kind"])
 
 
 @lru_cache(maxsize=1)

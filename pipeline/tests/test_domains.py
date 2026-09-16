@@ -3,7 +3,7 @@
 import pytest
 
 import trace_pipeline.domains as domains
-from trace_pipeline import config
+from trace_pipeline import config, schema
 from trace_pipeline.domains import base, water
 
 
@@ -44,6 +44,12 @@ def fake_domain_cls():
 #: for the sake of one emphasised word. So the contract is that a caveat is plain prose, and it is
 #: enforced on the side that can be enforced.
 _MARKUP = ("*", "`", "](")
+
+
+@pytest.mark.parametrize("domain_id", domains.all_ids())
+def test_declared_change_types_are_in_the_schema(domain_id):
+    allowed = set(schema.load_schema()["$defs"]["properties"]["properties"]["change_type"]["enum"])
+    assert set(domains.get(domain_id).change_types) <= allowed
 
 
 @pytest.mark.parametrize("domain_id", domains.all_ids())

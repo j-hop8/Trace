@@ -32,7 +32,7 @@ const entry: DomainManifestEntry = {
   id: 'forest',
   label: { en: 'Forest', zh: '森林' },
   hue: '#15803d',
-  changeTypes: ['extent', 'loss'],
+  changeTypes: ['cover', 'loss'],
   temporal: { start: 2001, end: 2025 },
   source: {
     name: 'Hansen Global Forest Change',
@@ -177,7 +177,7 @@ describe('draw order', () => {
     // Cleared patches are painted *over* the extent to cut holes in it. Interleaving roles and
     // cohorts would scatter that and the holes would stop cutting.
     const ids = layersFor(entry, 2013, ALL).layers.map((l) => l.id);
-    const lastExtent = ids.reduce((last, id, i) => (id.includes('-extent-') ? i : last), -1);
+    const lastExtent = ids.reduce((last, id, i) => (id.includes('-cover-') ? i : last), -1);
     const firstCleared = ids.findIndex((id) => id.includes('-cleared-'));
 
     expect(lastExtent).toBeGreaterThanOrEqual(0);
@@ -256,7 +256,7 @@ describe('roles are derived from what the tileset holds', () => {
     // feature and were switched between as if they might.
     const roles = rolesOf(water);
 
-    expect(roles.some((role) => role.startsWith('extent-'))).toBe(false);
+    expect(roles.some((role) => role.startsWith('cover-'))).toBe(false);
     expect(roles.some((role) => role.startsWith('cleared-'))).toBe(false);
   });
 
@@ -299,7 +299,7 @@ describe('which toggle shows which layer', () => {
   it('shows the cleared patches with the extent, not with the loss', () => {
     // Taking out what has gone is part of drawing a baseline honestly, not an overlay the reader
     // opts into: an extent shown without its holes claims the 2000 canopy is still standing.
-    const withExtent = layerIdsForSelection(entry, new Set<ChangeType>(['extent']));
+    const withExtent = layerIdsForSelection(entry, new Set<ChangeType>(['cover']));
     const withLoss = layerIdsForSelection(entry, new Set<ChangeType>(['loss']));
 
     expect(withExtent.some((id) => id.includes('-cleared-fill-'))).toBe(true);
@@ -316,7 +316,7 @@ describe('which toggle shows which layer', () => {
 
     expect(layers).toHaveLength(ROLES * YEARS);
     expect(visibilityOf(`trace-${entry.id}-fill-loss-2013`)).toBe('visible');
-    expect(visibilityOf(`trace-${entry.id}-extent-fill-2013`)).toBe('none');
+    expect(visibilityOf(`trace-${entry.id}-cover-fill-2013`)).toBe('none');
   });
 });
 

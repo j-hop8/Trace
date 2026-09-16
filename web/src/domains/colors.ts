@@ -2,7 +2,7 @@
  * The colour rule, in one place.
  *
  * **Hue names the domain, always.** Blue is water, green is forest, and every state a domain can be
- * in — its extent, what stayed, what arrived, what went — is a fixed transform of that one hue.
+ * in — its cover, what stayed, what arrived, what went — is a fixed transform of that one hue.
  * There is no cross-domain change colour.
  *
  * That is a deliberate reversal. The first rule here was `domain colour = what's there; red =
@@ -32,10 +32,10 @@ const PAPER = '#ffffff';
 const MUTE = '#7d7a74';
 
 /**
- * Bare ground — what is left where a domain's extent has been taken away.
+ * Bare ground — what is left where a domain's cover has been taken away.
  *
- * Showing an extent honestly means drawing the baseline and removing everything lost by the
- * selected year. MapLibre fills cannot subtract, so the lost patches are painted over the extent in
+ * Showing a cover honestly means drawing the baseline and removing everything lost by the
+ * selected year. MapLibre fills cannot subtract, so the lost patches are painted over the cover in
  * the colour of the ground beneath, and the holes are what remains visible.
  *
  * This tracks the basemap's `earth` fill in `map/basemap/style.json`. It is duplicated here rather
@@ -46,7 +46,7 @@ const MUTE = '#7d7a74';
  * Exact only over bare earth. The basemap paints `landcover` and `landuse` over it at partial
  * opacity, so above those a hole is a few RGB units darker than the ground beside it — visible, if
  * at all, at high zoom over valley floors. Matching them properly would mean drawing the domain
- * layers underneath those two, which would also put them over the extent fill and tint the whole
+ * layers underneath those two, which would also put them over the cover fill and tint the whole
  * layer; the seam is the cheaper of the two errors.
  *
  * Ground, not data: this is the one colour here that is not a function of a domain hue.
@@ -99,7 +99,7 @@ export interface FeatureStyle {
 export function styleFor(hue: string, changeType: ChangeType): FeatureStyle {
   switch (changeType) {
     // The ground state: the subject at full strength, exactly as the manifest names it.
-    case 'extent': {
+    case 'cover': {
       return { color: hue, mark: hue, stroke: mix(hue, INK, 0.25), pattern: null };
     }
     // Present throughout, so it is the thing that did *not* happen. Pulled toward the basemap's own
@@ -108,7 +108,7 @@ export function styleFor(hue: string, changeType: ChangeType): FeatureStyle {
       const color = mix(hue, MUTE, 0.55);
       return { color, mark: color, stroke: mix(color, INK, 0.25), pattern: null };
     }
-    // More of the subject than there was: the same hue, lifted. Brighter than the extent it adds
+    // More of the subject than there was: the same hue, lifted. Brighter than the cover it adds
     // to, so a domain carrying both reads as baseline-plus-increment rather than two flat masses.
     case 'gain': {
       const color = mix(hue, PAPER, 0.32);
