@@ -53,7 +53,7 @@ def _change_types_for(domain: Domain) -> tuple[str, ...]:
     """What the domain's tileset actually contains, falling back to what it intends to produce.
 
     Measured first, because the manifest drives which views the UI offers: a domain declaring
-    `("extent", "loss")` whose extent pass was interrupted would otherwise still advertise a view
+    `("cover", "loss")` whose cover pass was interrupted would otherwise still advertise a view
     toggle, and switching to it would show an empty map with nothing to explain why.
 
     The fallback is for the pre-tiling case only -- writing a manifest before the archive exists

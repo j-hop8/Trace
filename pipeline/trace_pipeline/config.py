@@ -133,14 +133,18 @@ TAIWAN_PIXEL_HA: Final[float] = 0.071
 # whenever the threshold changes.
 FOREST_RETAINED_PCT: Final[float] = 90.3
 
-# Share of island-wide *baseline* forest area that survives MIN_PATCH_PIXELS: 2,335,902 of
-# 2,340,266 ha at >= TREECOVER_THRESHOLD_PCT canopy in HANSEN_BASELINE_YEAR, over TAIWAN_BBOX.
+# Share of island-wide *baseline* forest area that the cover layer draws on its first frame --
+# every cover feature, open blocks and closed pieces together, against the 2,340,266 ha the raster
+# holds at >= TREECOVER_THRESHOLD_PCT canopy in HANSEN_BASELINE_YEAR over TAIWAN_BBOX.
+# RE-MEASURE PENDING (T-029): numerator, denominator and ratio are filled in from the shipped
+# forest.geojson once the cover pass has run with loss holes cut in.
 #
 # Far higher than FOREST_RETAINED_PCT because the two sieve different things: loss is thousands of
 # scattered small patches, so dropping isolated pixels costs ~10% of it, while the baseline is one
-# near-continuous mass and the same rule costs 0.2%. Both figures are quoted to users, and quoting
-# the loss number for the extent layer would understate the extent layer's completeness by 10 pp.
-FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
+# near-continuous mass and the same rule costs a fraction of a percent. Both figures are quoted to
+# users, and quoting the loss number for the cover layer would understate its completeness by
+# 10 pp.
+FOREST_COVER_RETAINED_PCT: Final[float] = 99.8
 
 # Share of the water area that survives MIN_PATCH_PIXELS, measured on the ever-water raster
 # (transition >= 1) clipped to TAIWAN_LAND_BOUNDARY: components of at least MIN_PATCH_PIXELS
@@ -158,7 +162,7 @@ FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 # with a two-pixel fringe of a different class loses the fringe, not the lake.
 #
 # 103,175 of 117,685 ha. The first guess at this comment predicted a figure near
-# FOREST_EXTENT_RETAINED_PCT's 99.8%, reasoning that water is one near-continuous mass rather than
+# FOREST_COVER_RETAINED_PCT's 99.8%, reasoning that water is one near-continuous mass rather than
 # forest loss's scattered patches. Measuring says otherwise, and the reason is the segmentation
 # itself: splitting on transition class turns every lake's seasonal fringe into its own thin region,
 # so the sieve bites roughly as hard here as it does on forest loss. Sizing this by intuition would

@@ -6,9 +6,12 @@ produce a map that looks entirely plausible, which is exactly the kind of bug a 
 would not catch anyway.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
-from trace_pipeline import config, schema
+from trace_pipeline import config, extract, schema
 from trace_pipeline.domains import base, forest
 
 SQUARE = {
@@ -124,7 +127,9 @@ def test_caveat_reports_retained_share_not_only_the_threshold():
 
 
 def test_manifest_entry_is_well_formed():
-    entry = forest.ForestDomain().manifest_entry("pmtiles:///data/forest.pmtiles", ("loss",))
+    entry = forest.ForestDomain().manifest_entry(
+        "pmtiles:///data/forest.pmtiles", ("cover", "loss")
+    )
 
     assert entry["temporal"] == {"start": 2001, "end": 2025}
     assert entry["hue"] == config.DOMAIN_HUES["forest"]
@@ -138,3 +143,108 @@ def test_confidence_is_stated_not_fabricated_per_feature():
     a = forest.build_feature(SQUARE, 2005, 1.0)["properties"]["confidence"]
     b = forest.build_feature(SQUARE, 2020, 9.0)["properties"]["confidence"]
     assert a == b == forest.CONFIDENCE
+
+
+# --- cover ---------------------------------------------------------------------------------
+
+
+def test_open_cover_holds_from_the_baseline_through_the_record():
+    props = forest.build_cover_feature(SQUARE, 0.72, valid_to=None)["properties"]
+
+    assert props["change_type"] == "cover"
+    assert props["valid_from"] == config.HANSEN_BASELINE_YEAR
+    assert props["valid_to"] is None
+    assert props["method"] == forest.COVER_METHOD
+    assert props["metric"]["area_ha"] == 0.72
+    schema.validate(
+        schema.feature_collection([forest.build_cover_feature(SQUARE, 0.72, valid_to=None)])
+    )
+
+
+def test_closed_cover_ends_the_year_its_loss_is_dated():
+    """Half-open: the piece stands [2000, 2014) and the loss patch holds [2014, null)."""
+    feature = forest.build_cover_feature(SQUARE, 0.72, valid_to=2014)
+    props = feature["properties"]
+
+    assert props["valid_from"] == config.HANSEN_BASELINE_YEAR
+    assert props["valid_to"] == 2014
+    assert props["change_type"] == "cover"
+    schema.validate(schema.feature_collection([feature]))
+
+
+@pytest.mark.parametrize("valid_to", [2000, 1999])
+def test_cover_cannot_end_at_or_before_the_baseline(valid_to):
+    """lossyear starts at 2001, so such a value is a caller's bug, not data."""
+    with pytest.raises(ValueError, match="cannot end"):
+        forest.build_cover_feature(SQUARE, 0.72, valid_to=valid_to)
+
+
+def test_every_loss_patch_also_yields_a_closed_cover_piece(monkeypatch):
+    """One download, two features, identical geometry -- the handoff at L depends on it."""
+    domain = forest.ForestDomain()
+    calls: list[str] = []
+
+    def fake_download(collection, *, description):
+        calls.append(description)
+        if description.startswith("forest loss"):
+            year = int(description.rsplit(" ", 1)[1])
+            # Two patches in 2014, none in any other year -- keeps the assertion exact.
+            if year == 2014:
+                return [
+                    {"geometry": SQUARE, "properties": {"area_ha": 0.72}},
+                    {"geometry": SQUARE, "properties": {"area_ha": 1.5}},
+                ]
+            return []
+        return [{"geometry": SQUARE, "properties": {"area_ha": 900.0}}]
+
+    monkeypatch.setattr(extract, "download_features", fake_download)
+    monkeypatch.setattr(domain, "loss_patches_for_year", lambda aoi, year: object())
+    monkeypatch.setattr(domain, "cover_grid_cells", lambda aoi: [object()])
+    monkeypatch.setattr(domain, "cover_blocks_for_cell", lambda cell: object())
+
+    features = domain.extract(aoi=None)["features"]
+    losses = [f for f in features if f["properties"]["change_type"] == "loss"]
+    closed = [
+        f
+        for f in features
+        if f["properties"]["change_type"] == "cover" and f["properties"]["valid_to"] is not None
+    ]
+    open_cover = [
+        f
+        for f in features
+        if f["properties"]["change_type"] == "cover" and f["properties"]["valid_to"] is None
+    ]
+
+    assert len(losses) == len(closed) == 2
+    assert len(open_cover) == 1
+    for loss, piece in zip(losses, closed, strict=True):
+        assert piece["geometry"] == loss["geometry"]
+        assert piece["properties"]["metric"]["area_ha"] == loss["properties"]["metric"]["area_ha"]
+        assert piece["properties"]["valid_to"] == loss["properties"]["valid_from"] == 2014
+    # Every loss year was asked for, plus the one cover cell.
+    first, last = domain.temporal_range()
+    assert calls == [f"forest loss {y}" for y in range(first, last + 1)] + [
+        f"forest cover cell 1/{forest.COVER_GRID**2}"
+    ]
+
+
+def test_caveat_says_cover_is_drawn_until_the_loss_year_and_not_after():
+    caveat = forest.ForestDomain().caveat
+    assert "until the year" in caveat
+    assert "not after" in caveat
+    assert f"{config.FOREST_COVER_RETAINED_PCT:.1f}%" in caveat
+    assert f"{100 - config.FOREST_RETAINED_PCT:.0f}% of it" in caveat
+
+
+_SHIPPED = Path(__file__).resolve().parents[2] / "data" / "forest.geojson"
+
+
+@pytest.mark.skipif(not _SHIPPED.exists(), reason="no shipped forest.geojson (data/ is generated)")
+def test_shipped_cover_never_ends_at_or_before_it_begins():
+    """The builder refuses it; this checks the file that actually shipped agrees."""
+    features = json.loads(_SHIPPED.read_text(encoding="utf-8"))["features"]
+    cover = [f["properties"] for f in features if f["properties"]["change_type"] == "cover"]
+
+    assert cover, "shipped forest.geojson carries no cover features"
+    bad = [p for p in cover if p["valid_to"] is not None and p["valid_to"] <= p["valid_from"]]
+    assert not bad, f"{len(bad)} cover features end at or before they begin"

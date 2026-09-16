@@ -10,6 +10,13 @@ Extraction goes **year by year** rather than all at once. `lossyear` already enc
 pixel, so one request per year keeps each `reduceToVectors` inside Earth Engine's synchronous
 request budget, makes a failure retryable at one year rather than the whole island, and gives
 progress output on a job that runs for minutes.
+
+**Cover carries its own validity.** A loss patch dated L is, by construction, tree cover that stood
+from the baseline until L -- same pixels, same sieve, same geometry -- so every loss download also
+yields a *closed* cover piece `[2000, L)` at no extra request. The *open* cover `[2000, null)` is
+the baseline with mapped loss cut out of it before vectorising. Between them a year's cover is
+exactly what the cover features say holds in that year; nothing downstream has to subtract loss
+from a baseline to draw it.
 """
 
 from __future__ import annotations
@@ -21,30 +28,36 @@ from trace_pipeline.domains.base import Domain, SourceInfo, register
 
 METHOD = "Hansen lossyear"
 
-#: The baseline extent pass: where forest *was* in 2000, as opposed to what has gone since.
-EXTENT_METHOD = "Hansen treecover2000"
+#: The cover pass: where forest *was* in 2000, drawn forward until `lossyear` says it went. One
+#: method string for both the open blocks and the closed pieces, because it is one derivation --
+#: the closed pieces are simply the part of it whose end `lossyear` has recorded.
+COVER_METHOD = "Hansen treecover2000, ended by lossyear"
 
 #: Hansen's own accuracy figures are per-biome and not per-pixel, so a single flat value is the
 #: honest thing to carry rather than a fabricated per-feature score. Sub-1.0 because 30 m pixels
 #: over Taiwan's steep, cloud-prone terrain are not certainties.
 CONFIDENCE = 0.8
 
-#: The extent pass is chunked over an N x N grid of the AOI, because one request cannot carry it.
+#: The open-cover pass is chunked over an N x N grid of the AOI, because one request cannot carry
+#: it.
 #:
-#: Loss chunks by year; extent has no year to chunk on, so the split has to be spatial -- and a
+#: Loss chunks by year; open cover has no year to chunk on, so the split has to be spatial -- and a
 #: spatial split is a genuine cost, not a free one: a forest block straddling a cell edge comes
-#: back as two features, so `area_ha` on an extent polygon describes the piece inside that cell
+#: back as two features, so `area_ha` on an open-cover polygon describes the piece inside that cell
 #: rather than the whole block. Hence the coarsest grid that works, found by measurement against
-#: the central range (the densest, worst case):
+#: the central range (the densest, worst case). Measured first as a plain baseline:
 #:
 #:   2x2, 3x3 -> HTTP 400, request too large
 #:   4x4      -> 11,889 features / 22 MB / 13 s  <- chosen
 #:   6x6      ->  5,902 features / 11 MB /  8 s
 #:
-#: The consequence to remember: an extent polygon's `area_ha` is the area of a *block as this grid
-#: cut it*, so summing extent areas is not a way to measure island-wide forest. Any total the UI
-#: ever quotes has to be measured in the pipeline, not added up from features.
-EXTENT_GRID = 4
+#: and re-measured once the blocks carried their loss holes as interior rings (T-029), which is
+#: more geometry per request; see the run log recorded below the constant.
+#:
+#: The consequence to remember: an open-cover polygon's `area_ha` is the area of a *block as this
+#: grid cut it*, so summing cover areas is not a way to measure island-wide forest. Any total the
+#: UI ever quotes has to be measured in the pipeline, not added up from features.
+COVER_GRID = 4
 
 
 def loss_year_to_calendar(band_value: int) -> int:
@@ -93,24 +106,36 @@ def build_feature(geometry: dict[str, Any], calendar_year: int, area_ha: float) 
     return feature.to_geojson_feature(geometry)
 
 
-def build_extent_feature(geometry: dict[str, Any], area_ha: float) -> dict[str, Any]:
-    """Assemble one B4 feature from a vectorized baseline-forest block.
+def build_cover_feature(
+    geometry: dict[str, Any], area_ha: float, *, valid_to: int | None
+) -> dict[str, Any]:
+    """Assemble one B4 cover feature: tree cover standing from the baseline until `valid_to`.
 
-    `valid_from` is the baseline year, not the first loss year: this is the state Hansen observed
-    in 2000, and the loss features are what happens to it afterwards. `valid_to` is None for the
-    same reason loss patches carry None -- the baseline is not observed to end, it is eroded, and
-    the erosion is carried by the loss features rather than by shrinking this one.
+    `valid_from` is always the baseline year -- this is the state Hansen observed in 2000. What
+    varies is the end. `valid_to=None` is an open block: nothing in `lossyear` has ended it, so
+    it holds through the record. `valid_to=L` is a closed piece: the same pixels the loss patch
+    dated L covers, standing `[2000, L)` and gone from L on. Half-open, so the cover piece and
+    the loss patch hand off with no year in common.
+
+    A `valid_to` at or before the baseline is refused rather than validated away: `lossyear`
+    starts at 2001, so such a value cannot come from the data and can only be a caller's bug.
     """
     from trace_pipeline.schema import TraceFeature
+
+    if valid_to is not None and valid_to <= config.HANSEN_BASELINE_YEAR:
+        raise ValueError(
+            f"cover cannot end in {valid_to}: it begins at the {config.HANSEN_BASELINE_YEAR} "
+            f"baseline, and Hansen records no loss before {config.HANSEN_FIRST_LOSS_YEAR}"
+        )
 
     feature = TraceFeature(
         domain=ForestDomain.id,
         valid_from=config.HANSEN_BASELINE_YEAR,
-        valid_to=None,
+        valid_to=valid_to,
         change_type="cover",
         metric={"area_ha": round(area_ha, 4)},
         source=config.HANSEN_ASSET,
-        method=EXTENT_METHOD,
+        method=COVER_METHOD,
         confidence=CONFIDENCE,
     )
     return feature.to_geojson_feature(geometry)
@@ -148,15 +173,16 @@ class ForestDomain(Domain):
             f"{config.MIN_PATCH_PIXELS * config.TAIWAN_PIXEL_HA:.2f} ha) are not mapped, so this "
             f"shows about {config.FOREST_RETAINED_PCT:.0f}% of the tree-cover loss the source "
             "records for Taiwan. "
-            # The cover view is derived, not observed, and saying so is the whole point. Both
-            # errors are stated because they run in opposite directions and a reader who knows
-            # only one of them would draw the wrong conclusion about which way the estimate is off.
-            f"The cover view draws the {config.HANSEN_BASELINE_YEAR} baseline with mapped loss "
-            "removed, so it is an estimate of what remains rather than a fresh observation of it: "
-            "regrowth is not added back (Hansen's gain band ends in 2012 and is not comparable "
-            "year for year), and the unmapped loss above is not taken out. The baseline itself "
-            f"passes the same single-pixel sieve and retains about "
-            f"{config.FOREST_EXTENT_RETAINED_PCT:.1f}% of the canopy area the source records."
+            # Cover is the baseline drawn forward, and the two ways that is not a fresh observation
+            # run in opposite directions -- a reader who knows only one of them would draw the
+            # wrong conclusion about which way the picture is off, so both are stated.
+            f"The cover layer draws the {config.HANSEN_BASELINE_YEAR} baseline forward year by "
+            "year: a patch is drawn until the year Hansen records its loss and not after, so a "
+            "given year shows the baseline minus the loss mapped by then. Regrowth is not added "
+            "back (Hansen's gain band ends in 2012 and is not comparable year for year), and loss "
+            f"too small to map, about {100 - config.FOREST_RETAINED_PCT:.0f}% of it, stays in the "
+            "cover. The baseline passes the same single-pixel sieve and keeps about "
+            f"{config.FOREST_COVER_RETAINED_PCT:.1f}% of the canopy area the source records."
         )
 
     def temporal_range(self) -> tuple[int, int]:
@@ -210,17 +236,17 @@ class ForestDomain(Domain):
 
         return vectors.map(tag_area)
 
-    def extent_grid_cells(self, aoi: Any) -> list[Any]:
-        """The AOI split into EXTENT_GRID x EXTENT_GRID rectangles, in row-major order."""
+    def cover_grid_cells(self, aoi: Any) -> list[Any]:
+        """The AOI split into COVER_GRID x COVER_GRID rectangles, in row-major order."""
         import ee
 
         west, south, east, north = config.TAIWAN_BBOX
-        width = (east - west) / EXTENT_GRID
-        height = (north - south) / EXTENT_GRID
+        width = (east - west) / COVER_GRID
+        height = (north - south) / COVER_GRID
 
         cells = []
-        for row in range(EXTENT_GRID):
-            for col in range(EXTENT_GRID):
+        for row in range(COVER_GRID):
+            for col in range(COVER_GRID):
                 cells.append(
                     ee.Geometry.Rectangle(
                         [
@@ -233,23 +259,44 @@ class ForestDomain(Domain):
                 )
         return cells
 
-    def extent_blocks_for_cell(self, cell: Any) -> Any:
-        """The ee.FeatureCollection of baseline-forest polygons inside one grid cell.
+    def cover_blocks_for_cell(self, cell: Any) -> Any:
+        """The ee.FeatureCollection of *open* cover polygons inside one grid cell.
 
-        Deliberately the same shape as :meth:`loss_patches_for_year`: clip first, sieve on
-        connected-component size on the native grid, then vectorize. Sharing the sieve matters --
-        extent and loss have to agree about what counts as forest, or the loss patches would punch
-        holes in a baseline that never claimed those pixels in the first place.
+        Open cover is the 2000 baseline with the loss this pipeline maps already cut out of it, so
+        the polygons carry their holes as interior rings and hold `[2000, null)` as stated -- no
+        consumer has to subtract loss from them to draw a year.
+
+        Which loss gets cut is the load-bearing choice. Not every loss pixel: only loss in a
+        component of at least MIN_PATCH_PIXELS with the *same* `lossyear`, which is exactly what
+        :meth:`loss_patches_for_year` maps. `connectedPixelCount` counts same-valued neighbours,
+        so running it over `lossyear` yields the per-year components in one pass, and the sieve
+        below agrees with the loss pass's by construction. Sub-MMU loss stays in the cover: the
+        cover says "still there" precisely where the loss layer says "not mapped", and the caveat
+        states both. Cutting *all* loss instead would leave the two layers disagreeing about
+        thousands of isolated pixels, with neither able to say so.
+
+        Otherwise the same shape as :meth:`loss_patches_for_year`: clip first, sieve on
+        connected-component size on the native grid, then vectorize.
         """
         import ee
 
         image = ee.Image(config.HANSEN_ASSET).clip(cell)
-        forest_2000 = image.select("treecover2000").gte(config.TREECOVER_THRESHOLD_PCT).selfMask()
+        forest_2000 = image.select("treecover2000").gte(config.TREECOVER_THRESHOLD_PCT)
+
+        # Same-valued components over lossyear, within the baseline, are the per-year loss
+        # components. Pixels with lossyear 0 form components too, and are excluded by the gte(1).
+        lossyear = image.select("lossyear").updateMask(forest_2000)
+        same_year = lossyear.connectedPixelCount(maxSize=16, eightConnected=False)
+        mapped_loss = same_year.gte(config.MIN_PATCH_PIXELS).And(lossyear.gte(1)).unmask(0)
+
+        cover = forest_2000.And(mapped_loss.Not()).selfMask()
 
         native = image.select("treecover2000").projection()
 
-        component_size = forest_2000.connectedPixelCount(maxSize=16, eightConnected=False)
-        kept = forest_2000.updateMask(component_size.gte(config.MIN_PATCH_PIXELS))
+        # A baseline pixel left isolated by the holes around it is sieved out here, like any other
+        # single pixel; that is part of what FOREST_COVER_RETAINED_PCT measures.
+        component_size = cover.connectedPixelCount(maxSize=16, eightConnected=False)
+        kept = cover.updateMask(component_size.gte(config.MIN_PATCH_PIXELS))
 
         vectors = kept.reduceToVectors(
             geometry=cell,
@@ -265,26 +312,27 @@ class ForestDomain(Domain):
 
         return vectors.map(tag_area)
 
-    def extract_extent(self, aoi: Any) -> list[dict[str, Any]]:
-        """Baseline forest extent, one request per grid cell."""
+    def extract_cover(self, aoi: Any) -> list[dict[str, Any]]:
+        """Open cover `[2000, null)`, one request per grid cell."""
         features: list[dict[str, Any]] = []
 
-        for index, cell in enumerate(self.extent_grid_cells(aoi), start=1):
-            collection = self.extent_blocks_for_cell(cell)
+        for index, cell in enumerate(self.cover_grid_cells(aoi), start=1):
+            collection = self.cover_blocks_for_cell(cell)
             raw = extract.download_features(
-                collection, description=f"forest extent cell {index}/{EXTENT_GRID**2}"
+                collection, description=f"forest cover cell {index}/{COVER_GRID**2}"
             )
 
             for item in raw:
                 features.append(
-                    build_extent_feature(
+                    build_cover_feature(
                         geometry=item["geometry"],
                         area_ha=item["properties"]["area_ha"],
+                        valid_to=None,
                     )
                 )
 
             print(
-                f"  extent cell {index}/{EXTENT_GRID**2}: {len(raw):,} blocks "
+                f"  cover cell {index}/{COVER_GRID**2}: {len(raw):,} blocks "
                 f"(running total {len(features):,})",
                 flush=True,
             )
@@ -300,24 +348,27 @@ class ForestDomain(Domain):
             raw = extract.download_features(collection, description=f"forest loss {calendar_year}")
 
             for item in raw:
+                geometry = item["geometry"]
+                area_ha = item["properties"]["area_ha"]
                 features.append(
-                    build_feature(
-                        geometry=item["geometry"],
-                        calendar_year=calendar_year,
-                        area_ha=item["properties"]["area_ha"],
-                    )
+                    build_feature(geometry, calendar_year=calendar_year, area_ha=area_ha)
                 )
+                # The same pixels, standing until this year: one download, two features. Their
+                # geometries are identical by construction, which is what lets the cover and the
+                # loss hand off cleanly at `calendar_year` with nothing drawn twice or not at all.
+                features.append(build_cover_feature(geometry, area_ha, valid_to=calendar_year))
 
             # flush: this loop runs for minutes, and progress you cannot see is not progress.
             print(
-                f"  {calendar_year}: {len(raw):,} patches (running total {len(features):,})",
+                f"  {calendar_year}: {len(raw):,} patches, each also a closed cover piece "
+                f"(running total {len(features):,})",
                 flush=True,
             )
 
-        # Extent last because it is the newer, riskier pass -- but note this buys less than it
-        # looks like: `extract.run` writes nothing until this method returns, so a failure here
-        # still discards the loss features built above and the whole domain must be re-extracted.
-        # Only the previously written file on disk is protected, and that by `write_features`.
-        features.extend(self.extract_extent(aoi))
+        # Open cover last because it is the riskier pass -- but note this buys less than it looks
+        # like: `extract.run` writes nothing until this method returns, so a failure here still
+        # discards the features built above and the whole domain must be re-extracted. Only the
+        # previously written file on disk is protected, and that by `write_features`.
+        features.extend(self.extract_cover(aoi))
 
         return {"type": "FeatureCollection", "features": features}
