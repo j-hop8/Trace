@@ -17,16 +17,22 @@ change  — a verdict accumulated since the record's first year. valid_to is alw
   └ loss   — went (or was reduced) at valid_from
 ```
 
-Two rules change with it:
+Two rules come with it. **This ticket documents them in the schema; it does not enforce them
+in code.** Enforcement is T-031's job, because today's water extractor violates both (42,417
+closed `loss` features; 376 with `valid_to == valid_from`) and `TraceFeature.__post_init__`
+validates at construction — enforcing here would make `cli all` raise for water until T-031
+re-dates it, and `derive_valid_to` is out of this ticket's scope.
 
 1. **`valid_to` is half-open.** `schema.py:197` currently allows `valid_to == valid_from`, and
    `test_schema.py:198-200` pins a single-year pond as `1995→1995`. Under half-open that pond is
-   `[1995, 1996)`, so `valid_to == valid_from` becomes an *empty interval* and is rejected.
-   Half-open is what lets a forest cover piece `[2000, L)` and the forest loss `[L, null)` hand
-   off with no overlap — the follow-on tickets T-029/T-030 emit exactly that.
+   `[1995, 1996)`. Half-open is what lets a forest cover piece `[2000, L)` and the forest loss
+   `[L, null)` hand off with no overlap — T-029/T-030 emit exactly that. **Leave the `<` check
+   and the same-year test as they are**; give the test a docstring saying equality is tolerated
+   until T-031, which is the last emitter of it.
 2. **A change-kind feature cannot carry `valid_to`.** Change is cumulative, so it never closes.
-   Enforced in code (`_check_properties`), not in JSON Schema — the same split `schema.py:185-192`
-   explains for the ordering rule.
+   Will be enforced in `_check_properties` by T-031 (not JSON Schema — the same split
+   `schema.py:185-192` explains for the ordering rule). Here: state it in the `$comment`, and
+   ship `kind_of()` so T-031 has the lookup.
 
 Nothing in this ticket changes the data or the extraction. It is the foundation the pipeline
 tickets (T-029 forest cover, T-030 water cover, T-031 water re-dating) and the web tickets
@@ -75,9 +81,8 @@ layout in `LayerToggles.tsx`; the `styleFor` ramp values; any caveat text beyond
 - Add `Kind = Literal["cover", "change"]` and `kind_of() -> dict[str, str]`, read from
   `load_schema()["$defs"]["properties"]["properties"]["change_type"]["x-kind"]` — derived, the
   way `required_property_names()` (`:83-88`) is, so it cannot drift.
-- `_check_properties` (`:194-204`): change `valid_to < valid_from` to `valid_to <= valid_from`
-  with the message naming an empty interval; add a second rule — if `kind_of()[change_type] ==
-  "change"` and `valid_to` is not `None`, report that a change-kind feature cannot close.
+- `_check_properties` (`:194-204`): **unchanged.** Both new rules are documented in the schema
+  and enforced by T-031 (see Context). Do not add them here — they reject today's water output.
 
 `pipeline/trace_pipeline/domains/forest.py` — `"extent"` → `"cover"` at `:110` and `:123`.
 Here rather than in T-029 so `forest.extract` stays runnable against the new enum.
@@ -86,11 +91,11 @@ Here rather than in T-029 so `forest.extract` stays runnable against the new enu
 trailing comment at `:395`; the Literal is correct now.
 
 `pipeline/tests/test_schema.py`
-- `test_same_year_start_and_end_is_allowed` (`:198-200`) → `test_same_year_start_and_end_is_an_empty_interval`:
-  `make_feature(valid_from=1995, valid_to=1995)` must raise `FeatureValidationError`; a one-year
-  pond is `valid_from=1995, valid_to=1996` and must pass.
-- New: a change-kind feature (`change_type="loss"`) with `valid_to=2010` must raise; the same
-  with `valid_to=None` must pass; a cover feature with `valid_to=2010` must pass.
+- `test_same_year_start_and_end_is_allowed` (`:198-200`): keep the assertion; add a docstring
+  stating that `valid_to` is documented half-open, that equality is an empty interval under that
+  reading, and that it is tolerated until T-031 re-dates water, which is the last emitter of it.
+- New: `kind_of()` returns exactly `{"cover": "cover", "gain": "change", "loss": "change",
+  "stable": "change"}` (read from the schema, so this is the x-kind ↔ enum agreement check).
 - `test_change_type_values_match_the_typescript_union` (`:265-271`) → a three-way check:
   schema `enum` == `x-kind` keys == the values parsed from the TS union in
   `web/src/types/feature.ts` == the keys parsed from `KIND_OF` in the same file (regex
@@ -139,13 +144,14 @@ filters it out and forest shows no cover toggle locally. `data/` is gitignored; 
 **Acceptance criteria:**
 - [ ] Schema `enum`, `x-kind` keys, `schema.ChangeType`, the TS `ChangeType` union and `KIND_OF`
       all name exactly `{cover, gain, loss, stable}`, and one test checks all five against each other.
-- [ ] `valid_to == valid_from` is rejected as an empty interval; a change-kind feature with a
-      non-null `valid_to` is rejected; a cover feature with `valid_to` passes.
+- [ ] The schema's `valid_to` description and `$comment` state the half-open rule and the
+      change-never-closes rule; `_check_properties` is unchanged; `kind_of()` exists and is tested.
+      (Enforcement of both rules is a T-031 acceptance criterion, not this one.)
 - [ ] `grep -rn "'extent'\|\"extent\"" web/src pipeline schema CLAUDE.md` returns nothing.
 - [ ] Every registered domain's `change_types` is a subset of the schema enum (new test).
 - [ ] `CLAUDE.md` carries the two-kinds paragraph and the half-open `valid_to` rule.
 - [ ] No `web/` test assertion was weakened — only the string `extent` changed in fixtures.
 - [ ] Ticket file moved to `.agents/tickets/done/`.
 
-**Verify:** `cd pipeline && pytest && ruff check . && ruff format --check . && cd ../web && npm run typecheck && npm test && npm run format:check`
+**Verify** (must be green — 196 pytest, 52 vitest with 3 tiles-test skips when `data/` is absent): `cd pipeline && pytest && ruff check . && ruff format --check . && cd ../web && npm run typecheck && npm test && npm run format:check`
 **Owner:** codex

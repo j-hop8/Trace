@@ -201,19 +201,11 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
 
     valid_from = props.get("valid_from")
     valid_to = props.get("valid_to")
-    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to <= valid_from:
+    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to < valid_from:
         problems.append(
-            f"{where}: valid_to ({valid_to}) is not after valid_from ({valid_from}) -- "
-            f"an empty interval is not a state"
+            f"{where}: valid_to ({valid_to}) is before valid_from ({valid_from}) -- "
+            f"a state cannot end before it begins"
         )
-
-    change_type = props.get("change_type")
-    if (
-        isinstance(change_type, str)
-        and kind_of().get(change_type) == "change"
-        and valid_to is not None
-    ):
-        problems.append(f"{where}: a change-kind feature cannot close (valid_to must be null)")
 
     return problems
 

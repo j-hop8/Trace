@@ -85,7 +85,7 @@ def test_error_names_the_offending_feature_index():
 def test_reversed_dates_message_explains_the_rule():
     with pytest.raises(schema.FeatureValidationError) as excinfo:
         schema.validate(load("invalid_reversed_dates"))
-    assert "empty interval" in str(excinfo.value)
+    assert "cannot end before it begins" in str(excinfo.value)
 
 
 def test_all_problems_are_collected_not_just_the_first():
@@ -160,7 +160,7 @@ def test_dataclass_round_trips_through_validation():
 
 def test_dataclass_rejects_reversed_dates_at_construction():
     """Failing here points the traceback at the extraction code that built it."""
-    with pytest.raises(schema.FeatureValidationError, match="empty interval"):
+    with pytest.raises(schema.FeatureValidationError, match="cannot end before it begins"):
         make_feature(valid_from=2008, valid_to=1990)
 
 
@@ -198,19 +198,18 @@ def test_open_ended_state_is_allowed():
     assert feature.properties()["valid_to"] is None
 
 
-def test_same_year_start_and_end_is_an_empty_interval():
-    with pytest.raises(schema.FeatureValidationError, match="empty interval"):
-        make_feature(valid_from=1995, valid_to=1995)
-
-    assert make_feature(valid_from=1995, valid_to=1996).properties()["valid_to"] == 1996
+def test_same_year_start_and_end_is_allowed():
+    """valid_to is documented half-open, but equality is tolerated until T-031 re-dates water."""
+    assert make_feature(valid_from=1995, valid_to=1995).properties()["valid_to"] == 1995
 
 
-def test_change_kind_cannot_close_but_cover_can():
-    with pytest.raises(schema.FeatureValidationError, match="change-kind feature cannot close"):
-        make_feature(change_type="loss", valid_to=2010)
-
-    assert make_feature(change_type="loss", valid_to=None).properties()["valid_to"] is None
-    assert make_feature(change_type="cover", valid_to=2010).properties()["valid_to"] == 2010
+def test_kind_of_matches_the_schema_taxonomy():
+    assert schema.kind_of() == {
+        "cover": "cover",
+        "gain": "change",
+        "loss": "change",
+        "stable": "change",
+    }
 
 
 def test_subtype_is_omitted_when_absent_rather_than_null():
