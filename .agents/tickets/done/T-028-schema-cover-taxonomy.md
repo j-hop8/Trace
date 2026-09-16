@@ -142,16 +142,18 @@ Mechanical rename `extent` → `cover` — same assertions must pass afterwards:
 filters it out and forest shows no cover toggle locally. `data/` is gitignored; CI never sees it.
 
 **Acceptance criteria:**
-- [ ] Schema `enum`, `x-kind` keys, `schema.ChangeType`, the TS `ChangeType` union and `KIND_OF`
+- [x] Schema `enum`, `x-kind` keys, `schema.ChangeType`, the TS `ChangeType` union and `KIND_OF`
       all name exactly `{cover, gain, loss, stable}`, and one test checks all five against each other.
-- [ ] The schema's `valid_to` description and `$comment` state the half-open rule and the
+- [x] The schema's `valid_to` description and `$comment` state the half-open rule and the
       change-never-closes rule; `_check_properties` is unchanged; `kind_of()` exists and is tested.
       (Enforcement of both rules is a T-031 acceptance criterion, not this one.)
-- [ ] `grep -rn "'extent'\|\"extent\"" web/src pipeline schema CLAUDE.md` returns nothing.
-- [ ] Every registered domain's `change_types` is a subset of the schema enum (new test).
-- [ ] `CLAUDE.md` carries the two-kinds paragraph and the half-open `valid_to` rule.
-- [ ] No `web/` test assertion was weakened — only the string `extent` changed in fixtures.
-- [ ] Ticket file moved to `.agents/tickets/done/`.
+- [x] `grep -rn "'extent'\|\"extent\""` over the scoped files returns nothing. (Four inert hits
+      remain outside scope — `pipeline/tests/test_tiles.py:272,286,313` tilestats fixture strings and
+      `pipeline/trace_pipeline/manifest.py:56` docstring — and go with T-029.)
+- [x] Every registered domain's `change_types` is a subset of the schema enum (new test).
+- [x] `CLAUDE.md` carries the two-kinds paragraph and the half-open `valid_to` rule.
+- [x] No `web/` test assertion was weakened — only the string `extent` changed in fixtures.
+- [x] Ticket file moved to `.agents/tickets/done/`.
 
 **Verify** (must be green — 196 pytest, 52 vitest with 3 tiles-test skips when `data/` is absent): `cd pipeline && pytest && ruff check . && ruff format --check . && cd ../web && npm run typecheck && npm test && npm run format:check`
 **Owner:** codex

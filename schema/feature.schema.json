@@ -117,7 +117,7 @@
             "properties": {
               "valid_to": { "minimum": 1500 }
             },
-            "$comment": "Ordering (valid_to > valid_from) is enforced in code; JSON Schema cannot compare two sibling values."
+            "$comment": "Ordering (valid_to >= valid_from) is enforced in code; JSON Schema cannot compare two sibling values. T-031 tightens this to > once valid_to is half-open for every domain."
           }
         }
       ]

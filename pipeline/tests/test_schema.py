@@ -99,7 +99,6 @@ def test_all_problems_are_collected_not_just_the_first():
 def test_long_problem_lists_are_truncated_in_the_message():
     """Printing 40k errors helps nobody; the count still has to be honest."""
     one = load("invalid_empty_metric")["features"][0]
-    one["properties"]["valid_to"] = None
     collection = schema.feature_collection([json.loads(json.dumps(one)) for _ in range(40)])
 
     with pytest.raises(schema.FeatureValidationError) as excinfo:

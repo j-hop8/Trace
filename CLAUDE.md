@@ -65,7 +65,8 @@ schema is not, so that migration stays a data load rather than a redesign.
 `cover` is the state that exists in year Y and carries its own half-open validity interval
 `[valid_from, valid_to)`; `valid_to` is the first year the state no longer holds, and `null` means
 open. `change` is a verdict accumulated since the record's first year, so `stable`, `gain`, and
-`loss` always carry `valid_to: null` and remain drawn in every later year.
+`loss` always carry `valid_to: null` and remain drawn in every later year. Water's change
+features do not yet satisfy this (see the cohort note above); T-031 re-dates them.
 
 ### Colour is a pure function, and hue means the domain
 
