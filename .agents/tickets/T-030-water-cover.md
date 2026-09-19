@@ -119,16 +119,16 @@ classes carry no new change; cover continues to `last`.
   `valid_to > valid_from` or null, `subtype` absent, `valid_from ≥ range_first`.
 
 **Acceptance criteria:**
-- [ ] Every cover feature `[valid_from, valid_to)` with `valid_to > valid_from` or null; `method`
+- [x] Every cover feature `[valid_from, valid_to)` with `valid_to > valid_from` or null; `method`
       names run-length and imputation; `subtype` absent.
-- [ ] A blind year does not end a run; water first observed after only blind years starts at
+- [x] A blind year does not end a run; water first observed after only blind years starts at
       `range_first` (unit tests on the pure rule).
-- [ ] Cover and change apply the identical pixel mask (`managed_seasonal_keep()` called from both).
-- [ ] `WATER_COVER_RETAINED_PCT` and `WATER_COVER_IMPUTED_PCT` measured island-wide, quoted in the
+- [x] Cover and change apply the identical pixel mask (`managed_seasonal_keep()` called from both).
+- [x] `WATER_COVER_RETAINED_PCT` and `WATER_COVER_IMPUTED_PCT` measured island-wide, quoted in the
       caveat, comments state numerator, denominator and basis.
-- [ ] Manifest measures water `changeTypes = ["cover", "gain", "loss", "stable"]` from tilestats.
-- [ ] `tiles.verify` passes with no drops.
-- [ ] The web tiles test passes for water against the regenerated archive (cover selection ==
+- [x] Manifest measures water `changeTypes = ["cover", "gain", "loss", "stable"]` from tilestats.
+- [x] `tiles.verify` passes with no drops.
+- [x] The web tiles test passes for water against the regenerated archive (cover selection ==
       `from ≤ Y < to`, no double-draw); the change-kind expiry check now fails for water rather than
       warning — that is T-031's pressure, and the PR says so.
 
