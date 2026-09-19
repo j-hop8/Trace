@@ -227,7 +227,7 @@ WATER_PIXEL_HA = 0.071
 #:
 #: The cover pass (T-030) is heavier again and was measured the same way, on the densest cell
 #: first: 166,697 runs over 19 start-year-pair requests, 79 MB, 409 s, the heaviest single request
-#: (the 1984-85 pair, every pre-record body) 40,116 runs and 21.7 MB. Island-wide 483,675 cover
+#: (the 1984-85 pair, every pre-record body) 40,116 runs and 22 MB. Island-wide 483,675 cover
 #: runs across the 15 cells in 1h09m alongside the change pass; 4x4 holds.
 #:
 #: The consequence to remember, same as forest's: a water body straddling a cell edge comes back
