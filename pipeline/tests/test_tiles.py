@@ -269,7 +269,7 @@ def test_change_types_are_read_from_the_archive(tmp_path, monkeypatch):
                         "layer": "forest",
                         "count": 3,
                         "attributes": [
-                            {"attribute": "change_type", "values": ["loss", "extent"]},
+                            {"attribute": "change_type", "values": ["loss", "cover"]},
                             {"attribute": "confidence", "values": [0.8]},
                         ],
                     }
@@ -283,7 +283,7 @@ def test_change_types_are_read_from_the_archive(tmp_path, monkeypatch):
         lambda *a, **k: SimpleNamespace(returncode=0, stdout=metadata, stderr=""),
     )
 
-    assert tiles.change_types_in(archive) == ("extent", "loss")
+    assert tiles.change_types_in(archive) == ("cover", "loss")
 
 
 def test_change_types_are_none_when_the_archive_cannot_be_read(tmp_path, monkeypatch):
@@ -300,7 +300,7 @@ def test_change_types_are_none_when_the_archive_cannot_be_read(tmp_path, monkeyp
 
 
 def test_manifest_prefers_the_measured_change_types(tmp_path, monkeypatch):
-    """An interrupted extent pass must not leave the UI advertising an extent view."""
+    """An interrupted cover pass must not leave the UI advertising a cover toggle."""
     from trace_pipeline import manifest, tiles
 
     monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
@@ -310,7 +310,7 @@ def test_manifest_prefers_the_measured_change_types(tmp_path, monkeypatch):
     class Declared(base.Domain):
         id = "forest"
         label = {"en": "Forest", "zh": "森林"}
-        change_types = ("extent", "loss")
+        change_types = ("cover", "loss")
 
         @property
         def source(self):

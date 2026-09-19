@@ -111,6 +111,16 @@ def test_retained_percentage_is_plausible_for_the_threshold():
     assert 85 <= config.FOREST_RETAINED_PCT <= 95
 
 
+def test_cover_retained_percentage_is_near_total_but_not_over():
+    """The baseline is one near-continuous mass; the sieve costs it a fraction of a percent.
+
+    Capped at 100 because the numerator is vector area and the denominator is raster area, and
+    a ratio over 100 means the two were measured on different grids -- which is a finding to state
+    in the config comment, never a number to quote as a share.
+    """
+    assert 95 <= config.FOREST_COVER_RETAINED_PCT <= 100
+
+
 def test_loss_dated_at_the_record_start_is_a_share_of_loss_not_of_the_layer():
     """The two readings of this figure differ by a factor of three and only one is the point.
 

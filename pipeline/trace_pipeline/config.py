@@ -133,14 +133,28 @@ TAIWAN_PIXEL_HA: Final[float] = 0.071
 # whenever the threshold changes.
 FOREST_RETAINED_PCT: Final[float] = 90.3
 
-# Share of island-wide *baseline* forest area that survives MIN_PATCH_PIXELS: 2,335,902 of
-# 2,340,266 ha at >= TREECOVER_THRESHOLD_PCT canopy in HANSEN_BASELINE_YEAR, over TAIWAN_BBOX.
+# Share of island-wide *baseline* forest area the cover layer draws on its first frame:
+# 2,335,572 of 2,340,162 ha at >= TREECOVER_THRESHOLD_PCT canopy in HANSEN_BASELINE_YEAR, over
+# TAIWAN_BBOX. The 4,590 ha dropped are baseline pixels the sieve removes -- 4,029 ha isolated in
+# the source, and ~560 ha more left isolated once mapped loss is cut out of the open blocks (T-029).
+#
+# Measured raster-to-raster on Hansen's native grid, with `ee.Image.pixelArea()` on both sides:
+# numerator = (baseline minus mapped loss, sieved) union (mapped loss); denominator = baseline.
+# Not vector-over-raster, because the shipped polygons' `area_ha` sums a uniform 0.23% higher than
+# the same pixels' pixelArea -- 46,503 vs 46,395 ha for loss, which is not gridded, as well as for
+# cover -- so a ratio that mixes the two bases lands above 100% (100.03% on the T-029 run). Either
+# basis is a share; mixing them is not. The previous constant, whatever its comment said, was the
+# raster/raster figure too: it reproduces from the sieved raster (2,335,902) and not from the
+# shipped vectors (2,341,516).
 #
 # Far higher than FOREST_RETAINED_PCT because the two sieve different things: loss is thousands of
 # scattered small patches, so dropping isolated pixels costs ~10% of it, while the baseline is one
 # near-continuous mass and the same rule costs 0.2%. Both figures are quoted to users, and quoting
-# the loss number for the extent layer would understate the extent layer's completeness by 10 pp.
-FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
+# the loss number for the cover layer would understate its completeness by 10 pp.
+#
+# Re-measure whenever MIN_PATCH_PIXELS or TREECOVER_THRESHOLD_PCT changes, or the Hansen asset
+# version bumps.
+FOREST_COVER_RETAINED_PCT: Final[float] = 99.8
 
 # Share of the water area that survives MIN_PATCH_PIXELS, measured on the ever-water raster
 # (transition >= 1) clipped to TAIWAN_LAND_BOUNDARY: components of at least MIN_PATCH_PIXELS
@@ -158,7 +172,7 @@ FOREST_EXTENT_RETAINED_PCT: Final[float] = 99.8
 # with a two-pixel fringe of a different class loses the fringe, not the lake.
 #
 # 103,175 of 117,685 ha. The first guess at this comment predicted a figure near
-# FOREST_EXTENT_RETAINED_PCT's 99.8%, reasoning that water is one near-continuous mass rather than
+# FOREST_COVER_RETAINED_PCT's 99.8%, reasoning that water is one near-continuous mass rather than
 # forest loss's scattered patches. Measuring says otherwise, and the reason is the segmentation
 # itself: splitting on transition class turns every lake's seasonal fringe into its own thin region,
 # so the sieve bites roughly as hard here as it does on forest loss. Sizing this by intuition would
