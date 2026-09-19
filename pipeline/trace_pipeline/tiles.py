@@ -10,6 +10,14 @@ So the size-limit escapes are disabled rather than the drop-strategies enabled, 
 verified against the input count rather than assumed. If the output is ever too large, the honest
 fix is to raise the minimum mapping unit deliberately and restate the retained percentage — not
 to let the tiler decide which data the reader gets.
+
+**Every feature goes into the tile layer of its cohort** (`cohorts.py`), not into one layer named
+after the domain. The web draws a domain as hundreds of style layers, one per cohort, and
+MapLibre's worker runs each style layer's filter over every feature of the tile layer it names —
+so one layer per domain meant every feature was filtered hundreds of times per tile, and the
+opening view took minutes to parse. Cover features are written once per node of the interval tree
+that covers them, so the tile holds more features than the GeoJSON; the count that is verified is
+the count of *copies* this module chose to write, which is how "nothing dropped" stays checkable.
 """
 
 from __future__ import annotations
@@ -21,7 +29,9 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from trace_pipeline import cohorts as cohorts_module
 from trace_pipeline import extract
+from trace_pipeline.cohorts import Cohorts
 
 if TYPE_CHECKING:
     from trace_pipeline.domains.base import Domain
@@ -93,15 +103,54 @@ def pmtiles_path(domain_id: str) -> Path:
     return extract.DATA_DIR / f"{domain_id}.pmtiles"
 
 
-def count_features(geojson: Path) -> int:
-    """Features in the source file.
+def write_tippecanoe_input(
+    geojson: Path, destination: Path, cohorts: Cohorts
+) -> tuple[int, int, int]:
+    """Rewrite the collection as one line per tile feature, each naming its cohort's layer.
+
+    Tippecanoe reads newline-delimited features and honours a per-feature `tippecanoe.layer`, so
+    this is how a feature is steered into its cohort's layer -- and how a cover feature is written
+    once per interval node it belongs to. Returns `(source features, tile features written,
+    source features with no cohort)`; the second is what the built archive is checked against,
+    because it is the number of features this step *decided* to tile, and a tiler that lost any
+    of them is what the check exists to catch. The third is cover that ended before the range
+    began, which no layer could draw (`Cohorts.layers_for`); it is reported, never silent.
+
+    Every copy carries the source feature's position in the collection as its `id`, which
+    tippecanoe keeps as the tile feature's id. It is the only thing that tells a copy from a
+    neighbour: single-pixel patches share every attribute, and tippecanoe simplifies each layer
+    on its own, so two copies of one feature can differ in tile geometry. The web's tiles test
+    counts a feature once by it.
 
     Loads the document rather than streaming it: the extraction step already holds the whole
-    collection in memory, so this adds no new ceiling, and an exact count is what makes the
-    post-condition below meaningful.
+    collection in memory, so this adds no new ceiling.
+
+    Raises `CohortError` before tippecanoe runs for a feature that begins after the range ends.
     """
     with geojson.open(encoding="utf-8") as handle:
-        return len(json.load(handle)["features"])
+        features = json.load(handle)["features"]
+
+    written = 0
+    unplaced = 0
+    with destination.open("w", encoding="utf-8") as out:
+        for index, feature in enumerate(features):
+            layers = cohorts.layers_for(feature["properties"])
+            if not layers:
+                unplaced += 1
+                continue
+            for layer in layers:
+                record = {
+                    "type": "Feature",
+                    "id": index,
+                    "tippecanoe": {"layer": layer},
+                    "properties": feature["properties"],
+                    "geometry": feature["geometry"],
+                }
+                out.write(json.dumps(record))
+                out.write("\n")
+                written += 1
+
+    return len(features), written, unplaced
 
 
 def build(domain: Domain) -> Path:
@@ -117,7 +166,11 @@ def build(domain: Domain) -> Path:
             f"  python -m trace_pipeline.cli extract {domain.id}"
         )
 
-    expected = count_features(source)
+    # The same range the manifest will publish, so the tree the tile layers are named after is the
+    # tree the web builds from `temporal`. For water this probes Earth Engine once, exactly as the
+    # manifest step does; the alternative -- reading the range off the data -- would let the two
+    # drift, and a node the web never asks for is data that silently never draws.
+    cohorts = Cohorts(*domain.temporal_range())
     destination = pmtiles_path(domain.id)
 
     # Write beside the target and move on success, so a failed or interrupted run never leaves a
@@ -128,13 +181,16 @@ def build(domain: Domain) -> Path:
     # .pmtiles — the wrong format under the right name, which every later step would have believed.
     staging = destination.with_name(f"{domain.id}.partial.pmtiles")
     staging.unlink(missing_ok=True)
+    tippecanoe_input = staging.with_suffix(".ndjson")
 
     command = [
         tippecanoe,
         "--output",
         str(staging),
+        # Only a feature with no `tippecanoe.layer` of its own would land here, and every feature
+        # is given one -- so this layer never exists, and `verify` rejects the archive if it does.
         "--layer",
-        domain.id,  # must equal the manifest's sourceLayer
+        domain.id,
         "--minimum-zoom",
         str(MIN_ZOOM),
         "--maximum-zoom",
@@ -142,15 +198,25 @@ def build(domain: Domain) -> Path:
         f"--simplification={SIMPLIFICATION}",
         *NO_LOSS_FLAGS,
         "--force",
-        str(source),
+        str(tippecanoe_input),
     ]
-
-    print(f"[{domain.id}] tiling {expected:,} features…", flush=True)
 
     # One cleanup path for every failure, rather than an unlink beside each raise. The acceptance
     # criterion is that a failed run leaves no half-written archive behind, and that has to hold
     # for the exceptions nobody anticipated too — not only the ones with a matching `except`.
     try:
+        source_count, expected, unplaced = write_tippecanoe_input(source, tippecanoe_input, cohorts)
+        print(
+            f"[{domain.id}] tiling {source_count:,} features as {expected:,} cohort copies…",
+            flush=True,
+        )
+        if unplaced:
+            print(
+                f"[{domain.id}] {unplaced:,} cover features end before {cohorts.first_year} and "
+                f"have no year the map can show; left out of the tiles.",
+                flush=True,
+            )
+
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         output = f"{result.stdout}\n{result.stderr}"
 
@@ -164,10 +230,12 @@ def build(domain: Domain) -> Path:
                 f"with the areas the UI reports:\n  " + "\n  ".join(lost[:5])
             )
 
-        verify(staging, domain.id, expected)
+        verify(staging, cohorts, expected)
     except BaseException:
         staging.unlink(missing_ok=True)
         raise
+    finally:
+        tippecanoe_input.unlink(missing_ok=True)
 
     os.replace(staging, destination)
     print(f"[{domain.id}] {destination} ({destination.stat().st_size / 1e6:.1f} MB)", flush=True)
@@ -178,11 +246,12 @@ def build(domain: Domain) -> Path:
 PMTILES_MAGIC = b"PMTiles"
 
 
-def verify(archive: Path, domain_id: str, expected_features: int) -> None:
+def verify(archive: Path, cohorts: Cohorts, expected_features: int) -> None:
     """Post-conditions on the built archive. Raises rather than warning.
 
-    Checked rather than assumed because both failures here are silent: a wrong-format file still
-    has the right name, and a tiler that dropped features still exits zero.
+    Checked rather than assumed because every failure here is silent: a wrong-format file still
+    has the right name, a tiler that dropped features still exits zero, and a layer the web never
+    asks for is simply data that never draws.
     """
     with archive.open("rb") as handle:
         magic = handle.read(len(PMTILES_MAGIC))
@@ -193,8 +262,8 @@ def verify(archive: Path, domain_id: str, expected_features: int) -> None:
             f"output format from the file extension — check that it ends in .pmtiles."
         )
 
-    stats = _layer_stats(archive)
-    if stats is None:
+    counts = layer_counts(archive)
+    if counts is None:
         archive.unlink(missing_ok=True)
         raise TilingError(
             f"could not read the feature count back from {archive.name}. The build is refused "
@@ -203,52 +272,65 @@ def verify(archive: Path, domain_id: str, expected_features: int) -> None:
             f"evidence — its diagnostics are not a correctness API."
         )
 
-    layer, count = stats
-    if layer != domain_id:
+    strays = [layer for layer, _ in counts if not cohorts.is_layer(layer)]
+    if strays:
         archive.unlink(missing_ok=True)
         raise TilingError(
-            f"tileset layer is {layer!r} but the manifest will point at sourceLayer "
-            f"{domain_id!r} — the web app would find no features."
+            f"{archive.name} holds layer {strays[0]!r}, which is not a cohort the web builds for "
+            f"{cohorts.first_year}-{cohorts.last_year} — the features in it would never draw."
         )
+
+    count = sum(n for _, n in counts)
     if count != expected_features:
         archive.unlink(missing_ok=True)
         raise TilingError(
-            f"{domain_id}: tiled {count:,} features but the source has {expected_features:,}. "
-            f"The map would report different totals from the data."
+            f"{archive.name}: tiled {count:,} features but {expected_features:,} were written for "
+            f"tiling. The map would report different totals from the data."
         )
 
 
+def source_layers_in(archive: Path) -> tuple[str, ...] | None:
+    """The tile layers the built archive actually contains, sorted.
+
+    The manifest publishes this list and the web builds exactly one style layer per name in it,
+    so it has to be *measured*: a cohort with no features gets no layer from tippecanoe, and a
+    style layer naming a layer the source lacks is an error MapLibre raises on every tile.
+
+    Returns None when the archive is missing or its stats cannot be read -- the caller decides
+    whether that is fatal, exactly as :func:`layer_counts` does.
+    """
+    counts = layer_counts(archive)
+    if counts is None:
+        return None
+    return tuple(sorted(layer for layer, _ in counts))
+
+
 def change_types_in(archive: Path) -> tuple[str, ...] | None:
-    """The distinct `change_type` values the built archive actually contains.
+    """The distinct states the built archive actually contains, read off its layer names.
 
     The manifest advertises this so the web app knows which views a domain can offer, and it has
     to be *measured* rather than declared: a domain class asserting "I produce extent and loss"
     stays true in the manifest even when the extent pass was interrupted, and the UI then offers a
-    view toggle that switches to an empty map. Tippecanoe already records the distinct values of
-    every attribute in tilestats, so the tileset can be asked directly.
+    view toggle that switches to an empty map.
 
-    Returns None when the archive is missing or its stats cannot be read -- the caller decides
-    whether that is fatal, exactly as :func:`_layer_stats` does.
+    Returns None when the archive is missing, its stats cannot be read, or a layer is not named
+    for a cohort -- that last is an archive from before cohort layers, which the web cannot draw.
     """
-    metadata = _tilestats_layers(archive)
-    if metadata is None:
+    layers = source_layers_in(archive)
+    if layers is None:
         return None
 
-    for attribute in metadata.get("attributes", []):
-        if attribute.get("attribute") != "change_type":
-            continue
-        values = attribute.get("values")
-        if not isinstance(values, list):
+    change_types: set[str] = set()
+    for layer in layers:
+        change_type = cohorts_module.change_type_of(layer)
+        if change_type is None:
             return None
-        return tuple(sorted(str(value) for value in values))
-
-    # The layer exists but carries no change_type at all, which is a broken tileset rather than an
-    # empty one -- every B4 feature is required to have it.
-    return None
+        change_types.add(change_type)
+    return tuple(sorted(change_types))
 
 
-def _tilestats_layers(archive: Path) -> dict[str, Any] | None:
-    """The single layer's tilestats block, or None if it cannot be read."""
+def _tilestats_layers(archive: Path) -> list[dict[str, Any]] | None:
+    """Every layer's tilestats block, or None if they cannot be read."""
     try:
         result = subprocess.run(
             ["pmtiles", "show", "--metadata", str(archive)],
@@ -268,13 +350,13 @@ def _tilestats_layers(archive: Path) -> dict[str, Any] | None:
     except (ValueError, KeyError, TypeError):
         return None
 
-    if len(layers) != 1:
+    if not isinstance(layers, list) or not layers:
         return None
-    return layers[0]
+    return layers
 
 
-def _layer_stats(archive: Path) -> tuple[str, int] | None:
-    """(layer name, feature count) from the archive's tilestats, or None if unavailable.
+def layer_counts(archive: Path) -> list[tuple[str, int]] | None:
+    """`(layer name, feature count)` per layer from the archive's tilestats, or None if unavailable.
 
     Every failure here returns None rather than raising. This is the *verifier*, and an
     unavailable verifier must degrade to "unchecked, and said so" — not take down a build whose
@@ -283,7 +365,14 @@ def _layer_stats(archive: Path) -> tuple[str, int] | None:
     `build()`, and leave the staging file behind — breaking the idempotency guarantee for a
     machine that simply lacks an optional tool. `_tilestats_layers` carries that contract.
     """
-    layer = _tilestats_layers(archive)
-    if layer is None:
+    layers = _tilestats_layers(archive)
+    if layers is None:
         return None
-    return layer.get("layer"), layer.get("count")
+
+    counts: list[tuple[str, int]] = []
+    for layer in layers:
+        name, count = layer.get("layer"), layer.get("count")
+        if not isinstance(name, str) or not isinstance(count, int):
+            return None
+        counts.append((name, count))
+    return counts

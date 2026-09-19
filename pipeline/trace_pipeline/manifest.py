@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from trace_pipeline import config
+from trace_pipeline.cohorts import Cohorts
 from trace_pipeline.schema import REPO_ROOT
 
 if TYPE_CHECKING:
@@ -42,9 +43,14 @@ def build(domains: Sequence[Domain]) -> dict[str, Any]:
     generated-at field would make every run produce a different file even when the data is
     identical.
     """
-    entries = [
-        domain.manifest_entry(tiles_url(domain.id), _change_types_for(domain)) for domain in domains
-    ]
+    entries = []
+    for domain in domains:
+        change_types = _change_types_for(domain)
+        entries.append(
+            domain.manifest_entry(
+                tiles_url(domain.id), change_types, _source_layers_for(domain, change_types)
+            )
+        )
     _check(entries)
     return {"version": config.MANIFEST_VERSION, "domains": entries}
 
@@ -63,6 +69,22 @@ def _change_types_for(domain: Domain) -> tuple[str, ...]:
 
     measured = tiles.change_types_in(tiles.pmtiles_path(domain.id))
     return measured if measured is not None else tuple(domain.change_types)
+
+
+def _source_layers_for(domain: Domain, change_types: Sequence[str]) -> tuple[str, ...]:
+    """The tile layers the web should build style layers for -- measured, like the states.
+
+    The web builds one style layer per name listed and no others, so the list has to be what the
+    archive holds: a cohort with no features has no layer, and a style layer naming a layer its
+    source lacks is an error MapLibre raises on every tile. The fallback, for the same pre-tiling
+    case as above, is every cohort the range and states imply.
+    """
+    from trace_pipeline import tiles
+
+    measured = tiles.source_layers_in(tiles.pmtiles_path(domain.id))
+    if measured is not None:
+        return measured
+    return tuple(Cohorts(*domain.temporal_range()).all_layers(change_types))
 
 
 def _check(entries: Sequence[dict[str, Any]]) -> None:
@@ -85,6 +107,19 @@ def _check(entries: Sequence[dict[str, Any]]) -> None:
         if start > end:
             # The slider would render an empty or inverted range.
             raise ManifestError(f"{domain_id}: temporal range {start}-{end} runs backwards")
+
+        # Every tile layer must be a cohort the web builds for *this* range: a tileset built when
+        # the domain resolved to a different range names interval nodes this range's tree does
+        # not have, and the features in them would never draw. Rebuilding the tiles is the fix.
+        cohorts = Cohorts(start, end)
+        layers = (entry.get("tiles") or {}).get("sourceLayers") or []
+        strays = [layer for layer in layers if not cohorts.is_layer(layer)]
+        if strays:
+            raise ManifestError(
+                f"{domain_id}: tile layer {strays[0]!r} is not a cohort for {start}-{end}. The "
+                f"tiles were built for a different year range -- rebuild them:\n"
+                f"  python -m trace_pipeline.cli tiles {domain_id}"
+            )
 
         # Attribution is a licence obligation and the web app has no other source for it, so an
         # empty string here would silently drop a required credit.

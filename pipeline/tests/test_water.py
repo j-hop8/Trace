@@ -559,14 +559,14 @@ def test_caveat_names_small_ponds_by_their_local_name(monkeypatch):
 def test_manifest_entry_is_well_formed(monkeypatch):
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
     entry = water.WaterDomain().manifest_entry(
-        "pmtiles:///data/water.pmtiles", ("cover", "loss", "gain", "stable")
+        "pmtiles:///data/water.pmtiles", ("cover", "loss", "gain", "stable"), ("loss:2013",)
     )
 
     assert entry["id"] == "water"
     assert entry["temporal"] == {"start": 1984, "end": 2021}
     assert entry["hue"] == config.DOMAIN_HUES["water"]
     assert entry["source"]["attribution"] == "Source: EC JRC/Google"
-    assert entry["tiles"] == {"url": "pmtiles:///data/water.pmtiles", "sourceLayer": "water"}
+    assert entry["tiles"] == {"url": "pmtiles:///data/water.pmtiles", "sourceLayers": ["loss:2013"]}
 
 
 def test_confidence_is_stated_not_fabricated_per_feature():

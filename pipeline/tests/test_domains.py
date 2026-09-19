@@ -82,13 +82,13 @@ def test_domain_cannot_be_instantiated_without_implementing_the_contract():
 
 
 def test_manifest_entry_matches_the_web_contract(fake_domain_cls):
-    entry = fake_domain_cls().manifest_entry("pmtiles://water.pmtiles", ("loss",))
+    entry = fake_domain_cls().manifest_entry("pmtiles://water.pmtiles", ("loss",), ("loss:1984",))
 
     assert entry["id"] == "water"
     assert entry["label"]["zh"] == "水體"
     assert entry["hue"] == config.DOMAIN_HUES["water"]
     assert entry["temporal"] == {"start": 1984, "end": 2021}
-    assert entry["tiles"] == {"url": "pmtiles://water.pmtiles", "sourceLayer": "water"}
+    assert entry["tiles"] == {"url": "pmtiles://water.pmtiles", "sourceLayers": ["loss:1984"]}
     # Attribution must survive into the manifest verbatim -- it is a licence obligation, and the
     # web app has no other source for it.
     assert entry["source"]["attribution"] == "Source: EC JRC/Google"
@@ -106,8 +106,8 @@ def test_temporal_range_flows_into_the_manifest(fake_domain_cls):
         def temporal_range(self):
             return (1984, 2024)
 
-    assert Truncated().manifest_entry("x", ("loss",))["temporal"]["end"] == 2021
-    assert Extended().manifest_entry("x", ("loss",))["temporal"]["end"] == 2024
+    assert Truncated().manifest_entry("x", ("loss",), ())["temporal"]["end"] == 2021
+    assert Extended().manifest_entry("x", ("loss",), ())["temporal"]["end"] == 2024
 
 
 def test_registry_round_trip(monkeypatch, fake_domain_cls):

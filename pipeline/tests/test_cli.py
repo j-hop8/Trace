@@ -27,7 +27,7 @@ def test_version_flag_exits_cleanly():
     assert excinfo.value.code == 0
 
 
-@pytest.mark.parametrize("command", ["list", "extract", "tiles", "all"])
+@pytest.mark.parametrize("command", ["list", "extract", "tiles", "manifest", "all"])
 def test_every_documented_command_parses(command):
     args = cli.build_parser().parse_args([command])
     assert callable(args.func)
@@ -52,7 +52,7 @@ def test_all_fails_loudly_when_nothing_is_registered(capsys):
     assert "T-003" in stderr, "the message should say where the missing domains come from"
 
 
-@pytest.mark.parametrize("command", ["extract", "tiles"])
+@pytest.mark.parametrize("command", ["extract", "tiles", "manifest"])
 def test_extract_and_tiles_fail_before_importing_heavy_modules(command, capsys):
     """The empty-registry guard must come first -- otherwise these raise ImportError instead.
 

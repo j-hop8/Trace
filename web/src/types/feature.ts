@@ -74,6 +74,11 @@ export interface TraceFeatureProperties {
 /** A GeoJSON Feature carrying Trace properties. Also the shape of a decoded vector-tile feature. */
 export interface TraceFeature {
   type: 'Feature';
+  /**
+   * In a tile, the feature's position in the source collection. The pipeline writes a cover
+   * feature into one tile layer per interval node that covers it, and every copy carries this
+   * same id — the one thing that tells a copy from a neighbour with identical attributes.
+   */
   id?: string | number;
   geometry: GeoJSON.Geometry;
   properties: TraceFeatureProperties;

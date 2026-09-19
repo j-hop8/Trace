@@ -62,6 +62,10 @@ export function cohortYears(entry: DomainManifestEntry): number[] {
  * every feature from the start of the range to the current year — 2,656 of them at 2001 against
  * 91,088 at 2025, which is exactly why playback used to begin quickly and grind to a crawl.
  *
+ * Constant is not the same as free: MapLibre runs it over every feature of the cohort's *tile
+ * layer* whenever a tile is parsed, which is why each cohort reads a tile layer of its own — see
+ * `sourceLayerFor`.
+ *
  * **Precondition: change features are open-ended.** A cohort is switched on for every year at or
  * after its own and never switched off again, so this model is only correct for features that
  * never stop being true — which is what the taxonomy says of every `change`-kind feature
@@ -371,12 +375,13 @@ function rolesFor(entry: DomainManifestEntry): Role[] {
 }
 
 /**
- * One layer of a role, whichever way the role is split: its id, its fixed filter, and whether it
- * is shown for a year. Everything below walks these, so the two cohort models meet in exactly one
- * place and no caller has to know which it is holding.
+ * One layer of a role, whichever way the role is split: its id, the tile layer it reads, its
+ * fixed filter, and whether it is shown for a year. Everything below walks these, so the two
+ * cohort models meet in exactly one place and no caller has to know which it is holding.
  */
 interface Cohort {
   id: string;
+  sourceLayer: string;
   filter: FilterSpecification;
   shown: (year: number) => boolean;
 }
@@ -387,19 +392,81 @@ const cohortLayerId = (domainId: string, key: string, cohort: number | IntervalN
     ? `trace-${domainId}-${key}-${cohort}`
     : `trace-${domainId}-${key}-${cohort.start}-${cohort.end}`;
 
-function buildCohorts(entry: DomainManifestEntry, role: Role): Cohort[] {
-  if (role.cohorts === 'interval') {
-    return intervalNodes(entry).map((node) => ({
-      id: cohortLayerId(entry.id, role.key, node),
-      filter: intervalFilter(node, role.test),
-      shown: (year) => node.start <= year && year < node.end,
-    }));
+/**
+ * The tile layer a cohort's features are in: `loss:2013` for a year, `cover:2001-2026` for a node.
+ *
+ * This is the other half of why a step is cheap. The filter is what *defines* a cohort, and it
+ * is fixed — but MapLibre's worker runs every style layer's filter over every feature of the tile
+ * layer the style layer names, so with every cohort reading one tile layer, each feature was
+ * filtered once per cohort: 416 times for water, 167 million evaluations for the largest z7 tile,
+ * ~43 s of worker time before anything could draw. The pipeline now writes each feature into the
+ * tile layer of its cohort (`pipeline/trace_pipeline/cohorts.py`, the same rule as this file), so
+ * a filter here is a pass over its own cohort. The filter stays: it is the definition, the tile
+ * layer is the index, and the tiles test asserts that the two select the same features.
+ *
+ * A cover feature is in every node canonical for its validity, so it is written once per such
+ * node — about 2.1 copies on average for a closed stretch, and one for open-ended cover.
+ */
+export const sourceLayerFor = (changeType: ChangeType, cohort: number | IntervalNode) =>
+  typeof cohort === 'number'
+    ? `${changeType}:${cohort}`
+    : `${changeType}:${cohort.start}-${cohort.end}`;
+
+/**
+ * Every tile layer a domain's cohorts would read, whether or not the archive holds it.
+ *
+ * The full enumeration of the model, for the tests and for comparing against a built archive.
+ * The layers actually built are the subset the manifest lists — see `buildCohorts`.
+ */
+export function cohortSourceLayers(entry: DomainManifestEntry): string[] {
+  const names = new Set<string>();
+  for (const changeType of entry.changeTypes ?? []) {
+    if (cohortModelFor(changeType) === 'interval') {
+      for (const node of intervalNodes(entry)) names.add(sourceLayerFor(changeType, node));
+    } else {
+      for (const year of cohortYears(entry)) names.add(sourceLayerFor(changeType, year));
+    }
   }
-  return cohortYears(entry).map((cohort) => ({
-    id: cohortLayerId(entry.id, role.key, cohort),
-    filter: cohortFilter(entry, cohort, role.test),
-    shown: (year) => cohort <= year,
-  }));
+  return [...names];
+}
+
+/**
+ * The tile layers the manifest says the archive holds, as a set, cached per entry.
+ *
+ * A cohort whose tile layer is not here gets no style layer. That is not a loss of data — the
+ * pipeline lists what tippecanoe wrote, and a cohort with no features gets no layer — and the
+ * alternative is a style layer naming a layer its source lacks, which MapLibre reports as an
+ * error on every tile.
+ */
+const listedCache = new WeakMap<DomainManifestEntry, Set<string>>();
+
+function listedSourceLayers(entry: DomainManifestEntry): Set<string> {
+  let listed = listedCache.get(entry);
+  if (!listed) {
+    listed = new Set(entry.tiles.sourceLayers);
+    listedCache.set(entry, listed);
+  }
+  return listed;
+}
+
+function buildCohorts(entry: DomainManifestEntry, role: Role): Cohort[] {
+  const listed = listedSourceLayers(entry);
+  const cohorts: Cohort[] =
+    role.cohorts === 'interval'
+      ? intervalNodes(entry).map((node) => ({
+          id: cohortLayerId(entry.id, role.key, node),
+          sourceLayer: sourceLayerFor(role.changeType, node),
+          filter: intervalFilter(node, role.test),
+          shown: (year) => node.start <= year && year < node.end,
+        }))
+      : cohortYears(entry).map((cohort) => ({
+          id: cohortLayerId(entry.id, role.key, cohort),
+          sourceLayer: sourceLayerFor(role.changeType, cohort),
+          filter: cohortFilter(entry, cohort, role.test),
+          shown: (year) => cohort <= year,
+        }));
+
+  return cohorts.filter((c) => listed.has(c.sourceLayer));
 }
 
 /**
@@ -429,7 +496,9 @@ function cohortsOf(entry: DomainManifestEntry, role: Role): Cohort[] {
  * A change role flips exactly one cohort per step. A cover role's shown set is a root-to-leaf
  * path, so a step flips at most the two paths' symmetric difference: `2·(depth − 1)`, the root
  * being on both. The test asserts the real per-step counts stay under this, and that they read
- * the same backwards — the property that rules out anything accumulating.
+ * the same backwards — the property that rules out anything accumulating. A bound on the full
+ * model: a cohort the archive has no layer for is simply never written, so it only lowers the
+ * real count.
  */
 export function maxWritesPerStep(entry: DomainManifestEntry): number {
   const depth = intervalNodes(entry).reduce((max, node) => {
@@ -588,7 +657,7 @@ export function layersFor(
           id: c.id,
           type: built.type,
           source,
-          'source-layer': entry.tiles.sourceLayer,
+          'source-layer': c.sourceLayer,
           filter: c.filter,
           layout: { visibility },
           paint: {
