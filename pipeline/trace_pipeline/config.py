@@ -264,6 +264,28 @@ WATER_LOSS_DATED_AT_START_PCT: Final[float] = 70.9
 # Re-measure whenever MASK_ON_MANAGED_LAND or WORLDCOVER_ASSET changes.
 WATER_MANAGED_SEASONAL_DROPPED_PCT: Final[float] = 12.6
 
+# --- the water cover pass (T-030) ---------------------------------------------------------------
+#
+# Cover is JRC's yearly waterClass, run-length encoded per pixel: a shape is a stretch of years
+# over which the same ground was water every year, drawn for exactly those years. Both figures
+# below are in PIXEL-YEARS, not hectares -- a run is area x time, and a year boundary is a region
+# boundary, so hectares would understate what the two rules cost.
+#
+# RE-MEASURE PENDING (T-030): both filled in from the island-wide raster measurement over
+# TAIWAN_LAND_BOUNDARY once the pass has run.
+
+# Share of the water pixel-years behind the cover layer that were carried from the nearest
+# observed year rather than seen: `waterClass == WATER_CLASS_NO_DATA` is a year GSW could not
+# classify, not a dry one, and Taiwan's record is 100% blind in 1985 and mostly blind before 1988.
+# A blind year takes the last observation before it, else the first after it (`impute_nearest`).
+WATER_COVER_IMPUTED_PCT: Final[float] = 0.0
+
+# Share of water pixel-years (post managed-land rule) that survive the same-run MIN_PATCH_PIXELS
+# sieve. Lower than WATER_RETAINED_PCT's 87.7% is expected: segmenting by (from, to) makes every
+# year boundary a region boundary, so a two-pixel pond whose halves dried a year apart is two
+# single-pixel runs and drops out, where the change pass saw one two-pixel region and kept it.
+WATER_COVER_RETAINED_PCT: Final[float] = 0.0
+
 M2_PER_HA: Final[float] = 10_000.0
 
 # --- Output -----------------------------------------------------------------------------------

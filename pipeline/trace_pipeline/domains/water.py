@@ -50,6 +50,14 @@ asserts were water in its first epoch, `valid_from` is `range_first` and no year
 (`PRESENT_AT_START`). Only the arriving classes get a measured onset, and their onsets sit in the
 years the record can actually see. What measurement remains uses `median`, not `mean`, so a dried
 margin cannot drag a whole reservoir across a boundary.
+
+**Cover is a separate pass over the same stack.** The change features say what *moved*; the cover
+features say what was *there* in a year. Cover is `waterClass >= WATER_CLASS_SEASONAL`, run-length
+encoded per pixel over the years and vectorised one run at a time, so a shape is a stretch of
+years over which the same ground was water every year, and it is drawn for exactly those years
+(`[valid_from, valid_to)`, half-open). Blind years are imputed from the nearest observation so a
+year GSW could not see does not split a run in two -- see `impute_nearest`. The two passes share
+one pixel mask (`managed_seasonal_keep`), so they cannot disagree about which pixels exist.
 """
 
 from __future__ import annotations
@@ -63,6 +71,15 @@ from trace_pipeline.domains.base import Domain, SourceInfo, register
 logger = logging.getLogger(__name__)
 
 METHOD = "JRC GSW transition class; onset from yearly waterClass"
+
+#: The cover pass. Named for what it does to the years, since that is what a reader of a feature
+#: needs to know: a stretch, and blind years filled from the nearest one that was seen.
+COVER_METHOD = "JRC GSW YearlyHistory run-length, nearest-year imputed"
+
+#: The `to` half of a run label when the run never ends. Two digits, so `encode_run` can pack
+#: `from * 100 + to` into one integer for `reduceToVectors` to segment on; 99 is past any offset a
+#: 41-year record can produce (0..40), so it cannot collide with a real end year.
+RUN_OPEN = 99
 
 #: JRC's own accuracy figures for the yearly water classification are global, not per-pixel or
 #: per-biome, so — same reasoning as Hansen's flat CONFIDENCE in forest.py — one honest flat value
@@ -189,9 +206,9 @@ MIN_PATCH_PIXELS = 2
 WATER_PIXEL_HA = 0.071
 
 #: The AOI is split into a WATER_GRID x WATER_GRID grid before extracting, for the same reason as
-#: forest's `EXTENT_GRID`: one request over the whole island cannot carry it. Chosen by
+#: forest's `COVER_GRID`: one request over the whole island cannot carry it. Chosen by
 #: extrapolation, not forest's own more rigorous practice of measuring several grid sizes against
-#: the real, full worst case (`EXTENT_GRID`'s comment records three) — a ~0.98 deg² slice of
+#: the real, full worst case (`COVER_GRID`'s comment records three) — a ~0.98 deg² slice of
 #: northern Taiwan took 53 s for 6,823 features, so this starts at forest's own floor on the
 #: assumption water's heavier per-pixel cost (a 38-year stack reduction plus a `reduceRegions`
 #: join, against forest's single boolean mask) needs at least as fine a grid. The real full run
@@ -211,7 +228,7 @@ WATER_PIXEL_HA = 0.071
 #: The consequence to remember, same as forest's: a water body straddling a cell edge comes back
 #: as two features, so `area_ha` on a patch describes the piece inside its own cell, not the whole
 #: body — summing areas from these features is therefore not a way to measure island-wide water.
-#: Unlike forest's extent pass, a split here also gives the two pieces independent `first_year`/
+#: Unlike forest's cover pass, a split here also gives the two pieces independent `first_year`/
 #: `last_year`/`change_type`: a pond that filled in the middle of the record but straddles a cell
 #: boundary can come back as one half "stable" and the other "gain", with no shared record tying
 #: them back into one physical body.
@@ -290,6 +307,33 @@ class UnknownTransitionClass(ValueError):
 _managed_land_image: Any | None = None
 
 
+def managed_seasonal_keep() -> Any:
+    """The pixel mask both passes share: 1 where a pixel may exist, 0 where the managed-land rule
+    removes it.
+
+    Seasonal-grade water sitting on ground people build on or farm is far more likely to be the
+    shadow between towers or an irrigated field than a water body -- see `MASK_ON_MANAGED_LAND`
+    for why those classes and not the ones that say the water ended. A per-pixel test against two
+    island-wide rasters, evaluated identically everywhere: no place in Taiwan is named here or
+    anywhere else in this module, and none may be.
+
+    One function for the change pass and the cover pass, decided by the *transition class* even
+    for cover, so the two cannot disagree about which pixels exist: a `lost seasonal` pond on
+    now-built ground is kept by change, and its cover must exist for the years it was there.
+
+    `remap` off the frozenset rather than a chain of `.eq().Or()`, so the constant is the single
+    definition and the code cannot drift from it. `unmask(0)` on the transition band so a pixel
+    JRC never classed (transition absent) reads as *not* maskable and is kept -- the cover pass
+    reaches such pixels in the v1.5 extension years, and a mask that fails open loses nothing.
+    """
+    import ee
+
+    transition = ee.Image(config.GSW_MAPPING_LAYERS).select("transition").unmask(0)
+    maskable_codes = sorted(MASK_ON_MANAGED_LAND)
+    maskable = transition.remap(maskable_codes, [1] * len(maskable_codes), 0)
+    return maskable.And(managed_land()).Not()
+
+
 def managed_land() -> Any:
     """Ground people build on or farm, as a 1/0 ee.Image, cached for the life of the process.
 
@@ -363,6 +407,124 @@ def derive_valid_to(transition_code: int, measured_last_year: int, range_last: i
     if transition_code not in ENDED:
         return None
     return min(measured_last_year, range_last)
+
+
+def encode_run(from_offset: int, to_offset: int | None) -> int:
+    """One integer for a run `[from, to)`, in year offsets from the record's first year.
+
+    `reduceToVectors` segments on an integer band, so a run's two dates have to be one number for
+    adjacent pixels with the same run to become one polygon. `from * 100 + to`, with `RUN_OPEN`
+    standing in for an open end; `decode_run` is its inverse and the tests hold them together.
+    """
+    if from_offset < 0 or from_offset >= RUN_OPEN:
+        raise ValueError(f"run start offset {from_offset} is outside 0..{RUN_OPEN - 1}")
+    if to_offset is not None and not from_offset < to_offset < RUN_OPEN:
+        raise ValueError(
+            f"run end offset {to_offset} must be after {from_offset} and below {RUN_OPEN}"
+        )
+    return from_offset * 100 + (RUN_OPEN if to_offset is None else to_offset)
+
+
+def decode_run(label: int, range_first: int) -> tuple[int, int | None]:
+    """`(valid_from, valid_to)` in calendar years for a label `encode_run` produced.
+
+    Refuses anything it could not have produced -- an end at or before its start, or an offset the
+    encoding cannot hold -- rather than returning a year the map would then draw.
+    """
+    from_offset, to_code = divmod(int(label), 100)
+    if to_code == RUN_OPEN:
+        return (range_first + from_offset, None)
+    if to_code <= from_offset:
+        raise ValueError(
+            f"run label {label} ends ({to_code}) at or before it starts ({from_offset})"
+        )
+    return (range_first + from_offset, range_first + to_code)
+
+
+def impute_nearest(observations: list[bool | None]) -> list[bool]:
+    """The per-year water state with blind years filled from the nearest year that was seen.
+
+    `None` is a year GSW could not classify -- *No data*, not dry -- and Taiwan's early record is
+    mostly that (100% of 1985). Left as dry it would split every run at 1985, ending the water in
+    1984 and starting it again in 1986 with nothing in between; left masked it would do the same
+    by absence. So a blind year takes the last observation before it; with none, the first
+    observation after it; with none at all, not water.
+
+    Prefer-prior rather than truly nearest, so the rule is one pass forward and one back and a
+    reader can predict it: a blind 1985 between a wet 1984 and a dry 1986 is wet, because that is
+    what was last seen. The EE graph in `cover_run_labels` mirrors this exactly; this is the
+    version the tests can run.
+    """
+    n = len(observations)
+    forward: list[bool | None] = [None] * n
+    carry: bool | None = None
+    for i, seen in enumerate(observations):
+        if seen is not None:
+            carry = seen
+        forward[i] = carry
+
+    backward: list[bool | None] = [None] * n
+    carry = None
+    for i in range(n - 1, -1, -1):
+        seen = observations[i]
+        if seen is not None:
+            carry = seen
+        backward[i] = carry
+
+    return [
+        seen if seen is not None else (fwd if fwd is not None else bool(bwd))
+        for seen, fwd, bwd in zip(observations, forward, backward, strict=True)
+    ]
+
+
+def runs_of(states: list[bool]) -> list[tuple[int, int | None]]:
+    """The half-open runs `[from, to)` of consecutive `True` in `states`, as index offsets.
+
+    `to` is the first index that is not water; `None` if the run reaches the end of the record.
+    A single-year run at `i` is `(i, i + 1)`; `to == from` cannot occur.
+    """
+    runs: list[tuple[int, int | None]] = []
+    start: int | None = None
+    for i, wet in enumerate(states):
+        if wet and start is None:
+            start = i
+        elif not wet and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, None))
+    return runs
+
+
+def build_cover_feature(
+    geometry: dict[str, Any],
+    *,
+    run_label: int,
+    range_first: int,
+    area_ha: float,
+    gsw_asset: str,
+) -> dict[str, Any]:
+    """Assemble one B4 cover feature from a vectorized run of water years.
+
+    No `subtype`. A run can flip between seasonal and permanent from year to year -- every drawdown
+    reservoir does -- and splitting runs on that would turn each one into a stack of one-year
+    shapes; summarising it to a dominant class is a derived statistic this ticket does not define.
+    `TraceFeature` omits an absent subtype rather than writing null into every tile.
+    """
+    from trace_pipeline.schema import TraceFeature
+
+    valid_from, valid_to = decode_run(run_label, range_first)
+    feature = TraceFeature(
+        domain=WaterDomain.id,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        change_type="cover",
+        metric={"area_ha": round(area_ha, 4)},
+        source=gsw_asset,
+        method=COVER_METHOD,
+        confidence=CONFIDENCE,
+    )
+    return feature.to_geojson_feature(geometry)
 
 
 def build_feature(
@@ -439,7 +601,7 @@ def _resolve_gsw() -> tuple[int, int, str]:
 class WaterDomain(Domain):
     id = "water"
     label = {"en": "Water", "zh": "水體"}
-    change_types = ("loss", "gain", "stable")
+    change_types = ("cover", "loss", "gain", "stable")
 
     def _resolve(self) -> tuple[int, int, str]:
         """`(first_year, last_year, asset_id)` actually available, probing v1.5 at most once."""
@@ -522,7 +684,27 @@ class WaterDomain(Domain):
             "Taiwan's land boundary. Marine and intertidal water — tidal flats, lagoons and fish "
             "farms seaward of the coastline — is therefore absent rather than measured as "
             "unchanged, and a patch meeting the coast is cut at the boundary, so its area "
-            "describes the inland part alone."
+            "describes the inland part alone. "
+            # Cover is a different product from change and the reader has to know which one a
+            # shape came from: change is one verdict over the record, cover is a year-by-year
+            # count, and the same water can carry both.
+            "The cover layer is a year-by-year record from JRC's yearly history: each shape is a "
+            "stretch of years over which the same ground was classed as water every year, and it "
+            "is drawn only for those years, so a pond that dried and refilled is several shapes, "
+            "one per stretch. Where the source could not see a pixel, the nearest observed year's "
+            "state is carried over, so about "
+            f"{config.WATER_COVER_IMPUTED_PCT:.0f}% of the water-years behind this layer are "
+            f"carried rather than observed, and a stretch beginning in {first} may have begun "
+            "earlier. Stretches pass the same single-pixel sieve, keeping about "
+            f"{config.WATER_COVER_RETAINED_PCT:.0f}% of the water-years that survive the "
+            "managed-land rule. Cover and change come from two JRC products and can disagree at "
+            "a body's edge by a year or two."
+            + (
+                f" After {config.GSW_V14_LAST_YEAR} the change classes carry no new change; cover "
+                f"continues to {last}."
+                if last > config.GSW_V14_LAST_YEAR
+                else ""
+            )
         )
 
     def temporal_range(self) -> tuple[int, int]:
@@ -593,21 +775,11 @@ class WaterDomain(Domain):
             ee.Image(config.GSW_MAPPING_LAYERS).select("transition").rename("transition").toInt8()
         )
 
-        # Seasonal-grade water sitting on ground people build on or farm is far more likely to be
-        # the shadow between towers or an irrigated field than a water body — see
-        # `MASK_ON_MANAGED_LAND` for why these classes and not the ones that say the water ended.
-        # Masking the band rather than filtering features afterwards means these pixels never form
-        # regions at all, so an artefact cannot merge into a neighbouring real patch and drag its
-        # geometry across the city or the plain.
-        #
-        # A per-pixel test against two island-wide rasters, evaluated identically over every grid
-        # cell: no place in Taiwan is named here or anywhere else in this module, and none may be.
-        #
-        # `remap` off the frozenset rather than a chain of `.eq().Or()`, so the constant is the
-        # single definition and the code cannot drift from it.
-        maskable_codes = sorted(MASK_ON_MANAGED_LAND)
-        maskable = transition.remap(maskable_codes, [1] * len(maskable_codes), 0)
-        transition = transition.updateMask(maskable.And(managed_land()).Not())
+        # Masking the band rather than filtering features afterwards means the managed-land
+        # pixels never form regions at all, so an artefact cannot merge into a neighbouring real
+        # patch and drag its geometry across the city or the plain. The mask itself lives in
+        # `managed_seasonal_keep`, shared with the cover pass.
+        transition = transition.updateMask(managed_seasonal_keep())
 
         # Land before vectorizing, not after. Clipping the polygons afterwards would mean asking
         # Earth Engine to vectorize the whole Taiwan Strait first and then throwing almost all of
@@ -623,7 +795,7 @@ class WaterDomain(Domain):
     def grid_cells(self, aoi: Any) -> list[Any]:
         """The land-bearing cells of a `WATER_GRID` x `WATER_GRID` partition, in row-major order.
 
-        Same shape as forest's `extent_grid_cells`, over `config.TAIWAN_BBOX` rather than
+        Same shape as forest's `cover_grid_cells`, over `config.TAIWAN_BBOX` rather than
         whatever `aoi` was passed — the grid is a fixed partition of the island regardless of
         which sub-area extraction is asked for.
 
@@ -707,6 +879,189 @@ class WaterDomain(Domain):
 
         return regions.map(tag_area)
 
+    def cover_states(self, aoi: Any) -> tuple[list[Any], list[Any], Any]:
+        """Per-year water state over `aoi`, blind years imputed, as N ee.Images of 0/1.
+
+        Returns `(states, known, native)`: `states[i]` is 1 where the pixel is water in year
+        `first + i` under `impute_nearest`'s rule, `known[i]` is 1 where that year actually
+        observed the pixel (so the imputed share can be measured), and `native` is the source
+        grid, for the vectoriser.
+
+        The fill is the EE form of `impute_nearest`, built as two chains of `unmask`: forward,
+        `ffill_i = known_i ? obs_i : ffill_{i-1}`; backward likewise; then a pixel takes its own
+        observation, else the forward value, else the backward one, else not-water. `unmask` with
+        an image argument is the whole trick -- it fills exactly the masked pixels from another
+        image, which is what "carry the last observation" means on a grid.
+
+        The shared pixel mask is applied last, as `And`, so a removed pixel reads as not-water in
+        every year rather than as masked, and no run can start on it.
+        """
+        import ee
+
+        first, last, _ = self._resolve()
+        n = last - first + 1
+        images = self._yearly_water_class(aoi).sort("year").toList(n)
+        keep = managed_seasonal_keep()
+
+        native = ee.Image(images.get(0)).select("waterClass").projection()
+
+        observed: list[Any] = []
+        known: list[Any] = []
+        for i in range(n):
+            water_class = ee.Image(images.get(i)).select("waterClass")
+            seen = water_class.neq(config.WATER_CLASS_NO_DATA)
+            known.append(seen)
+            observed.append(water_class.gte(config.WATER_CLASS_SEASONAL).updateMask(seen))
+
+        forward: list[Any] = []
+        previous: Any | None = None
+        for i in range(n):
+            previous = observed[i] if previous is None else observed[i].unmask(previous)
+            forward.append(previous)
+
+        backward: list[Any | None] = [None] * n
+        following: Any | None = None
+        for i in range(n - 1, -1, -1):
+            following = observed[i] if following is None else observed[i].unmask(following)
+            backward[i] = following
+
+        states = [
+            forward[i].unmask(backward[i]).unmask(0).And(keep).rename("water") for i in range(n)
+        ]
+        return states, known, native
+
+    def cover_run_labels(self, aoi: Any) -> tuple[list[Any], Any]:
+        """One ee.Image per start-year pair, each pixel carrying `encode_run(from, to)` where a run
+        starts in one of those two years, masked elsewhere -- and the source grid.
+
+        A run starting at `i` ends at the first dry year after it: `next_dry` is a backward pass,
+        `next_dry_i = dry_i ? i : next_dry_{i+1}`, with `next_dry_N = N` meaning open. The label
+        is the pair packed into one integer, because `reduceToVectors` segments on one band and
+        adjacent pixels with the same `(from, to)` have to become one polygon.
+
+        Two start years share a band because a pixel cannot start a run in consecutive years -- a
+        run lasts at least one year and a dry year has to follow it -- so
+        `label_i.unmask(label_{i+1})` is disjoint per pixel, and halving the requests changes
+        nothing about what is segmented.
+        Per *ordinal* run (first run, second run) would not do: adjacent pixels with identical
+        `[1995, null)` runs whose ordinals differ, because one flickered earlier, would land in
+        different bands and one region would come back as two.
+        """
+        import ee
+
+        starts, ends, native = self.cover_runs(aoi)
+        n = len(starts)
+
+        labels: list[Any] = []
+        for i in range(n):
+            to_code = ends[i].where(ends[i].eq(n), RUN_OPEN)
+            labels.append(
+                ee.Image.constant(i * 100)
+                .add(to_code)
+                .updateMask(starts[i])
+                .toInt16()
+                .rename("run")
+            )
+
+        pairs: list[Any] = []
+        for j in range(0, n, 2):
+            pairs.append(labels[j] if j + 1 >= n else labels[j].unmask(labels[j + 1]))
+        return pairs, native
+
+    def cover_runs(self, aoi: Any) -> tuple[list[Any], list[Any], Any]:
+        """Where runs start and where each would end, as N ee.Images, plus the source grid.
+
+        `starts[i]` is 1 where a run begins in year offset `i`; `ends[i]` is the offset of the
+        first dry year after `i` (`N` if none -- the run is open), meaningful where `starts[i]`
+        is. Split out from `cover_run_labels` so the measurement that sets the config constants
+        can read run lengths off the same images the extraction segments on.
+        """
+        import ee
+
+        states, _, native = self.cover_states(aoi)
+        n = len(states)
+
+        starts = [states[0]] + [states[i].And(states[i - 1].Not()) for i in range(1, n)]
+
+        next_dry: list[Any] = [None] * (n + 1)
+        next_dry[n] = ee.Image.constant(n)
+        for i in range(n - 1, -1, -1):
+            next_dry[i] = ee.Image.constant(i).updateMask(states[i].Not()).unmask(next_dry[i + 1])
+
+        ends = [next_dry[i + 1] for i in range(n)]
+        return starts, ends, native
+
+    def cover_patches_for_cell(self, cell: Any) -> list[Any]:
+        """The ee.FeatureCollections of cover runs inside one grid cell, one per start-year pair,
+        area-tagged and sieved.
+
+        Same sieve as `patches_for_cell`: `connectedPixelCount` counts same-valued neighbours, and
+        the value is the run label, so a component is a region with one `(from, to)`. No reducer
+        on `reduceToVectors` -- the label carries both dates, and there is nothing else to measure.
+        """
+        pairs, native = self.cover_run_labels(cell)
+        collections: list[Any] = []
+
+        for label in pairs:
+            component_size = label.connectedPixelCount(maxSize=16, eightConnected=False)
+            kept = label.updateMask(component_size.gte(MIN_PATCH_PIXELS))
+
+            regions = kept.reduceToVectors(
+                geometry=cell,
+                crs=native,
+                scale=native.nominalScale(),
+                geometryType="polygon",
+                eightConnected=False,
+                labelProperty="run",
+                maxPixels=int(1e10),
+            )
+
+            def tag_area(feature: Any) -> Any:
+                area_ha = feature.geometry().area(maxError=1).divide(config.M2_PER_HA)
+                return feature.set("area_ha", area_ha)
+
+            collections.append(regions.map(tag_area))
+
+        return collections
+
+    def extract_cover(self, aoi: Any) -> list[dict[str, Any]]:
+        """Cover features for every land cell: one download per cell per start-year pair."""
+        from trace_pipeline import extract
+
+        first, _, asset = self._resolve()
+        features: list[dict[str, Any]] = []
+
+        cells = self.grid_cells(aoi)
+        total_cells = len(cells)
+
+        for index, cell in enumerate(cells, start=1):
+            collections = self.cover_patches_for_cell(cell)
+            in_cell = 0
+            for pair, collection in enumerate(collections, start=1):
+                description = (
+                    f"water cover cell {index}/{total_cells} pair {pair}/{len(collections)}"
+                )
+                raw = extract.download_features(collection, description=description)
+                for item in raw:
+                    features.append(
+                        build_cover_feature(
+                            geometry=item["geometry"],
+                            run_label=round(item["properties"]["run"]),
+                            range_first=first,
+                            area_ha=item["properties"]["area_ha"],
+                            gsw_asset=asset,
+                        )
+                    )
+                in_cell += len(raw)
+
+            print(
+                f"  cover cell {index}/{total_cells}: {in_cell:,} runs "
+                f"(running total {len(features):,})",
+                flush=True,
+            )
+
+        return features
+
     def extract(self, aoi: Any) -> dict[str, Any]:
         from trace_pipeline import extract
 
@@ -770,5 +1125,10 @@ class WaterDomain(Domain):
                 f"stack does not have",
                 flush=True,
             )
-        print(f"  {len(features):,} water patches, GSW {asset}", flush=True)
+        print(f"  {len(features):,} water change patches, GSW {asset}", flush=True)
+
+        # Cover last, for the same reason as forest: the riskier pass, and `extract.run` writes
+        # nothing until this method returns either way.
+        features.extend(self.extract_cover(aoi))
+        print(f"  {len(features):,} water features in all", flush=True)
         return {"type": "FeatureCollection", "features": features}
