@@ -201,10 +201,26 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
 
     valid_from = props.get("valid_from")
     valid_to = props.get("valid_to")
-    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to < valid_from:
+    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to <= valid_from:
+        # Half-open: valid_to is the first year the state no longer holds, so equality is an empty
+        # interval -- a state that ended the year it began, which is no state at all.
         problems.append(
-            f"{where}: valid_to ({valid_to}) is before valid_from ({valid_from}) -- "
-            f"a state cannot end before it begins"
+            f"{where}: valid_to ({valid_to}) is not after valid_from ({valid_from}) -- "
+            f"a state cannot end before it begins, and [from, to) with to == from is empty"
+        )
+
+    # Change accumulates: a verdict drawn from the year it applies and for every year after, so a
+    # change-kind feature never closes. Cover is the kind that ends. Enforced here because JSON
+    # Schema cannot condition one field on another's `x-kind`.
+    change_type = props.get("change_type")
+    if (
+        isinstance(change_type, str)
+        and kind_of().get(change_type) == "change"
+        and valid_to is not None
+    ):
+        problems.append(
+            f"{where}: change_type {change_type!r} is a change, and change never closes -- "
+            f"valid_to must be null; only a cover feature ends"
         )
 
     return problems

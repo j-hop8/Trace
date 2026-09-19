@@ -8,11 +8,26 @@
         "type": "Polygon",
         "coordinates": [
           [
-            [121.2158, 24.9931],
-            [121.2172, 24.9931],
-            [121.2172, 24.9942],
-            [121.2158, 24.9942],
-            [121.2158, 24.9931]
+            [
+              121.2158,
+              24.9931
+            ],
+            [
+              121.2172,
+              24.9931
+            ],
+            [
+              121.2172,
+              24.9942
+            ],
+            [
+              121.2158,
+              24.9942
+            ],
+            [
+              121.2158,
+              24.9931
+            ]
           ]
         ]
       },
@@ -21,8 +36,10 @@
         "subtype": "pond",
         "valid_from": 1984,
         "valid_to": 2008,
-        "change_type": "loss",
-        "metric": { "area_ha": 3.2 },
+        "change_type": "cover",
+        "metric": {
+          "area_ha": 3.2
+        },
         "source": "JRC/GSW1_4/YearlyHistory",
         "method": "JRC GSW YearlyHistory waterClass >= 2",
         "confidence": 0.85
@@ -35,11 +52,26 @@
         "type": "Polygon",
         "coordinates": [
           [
-            [121.301, 24.7712],
-            [121.3035, 24.7712],
-            [121.3035, 24.773],
-            [121.301, 24.773],
-            [121.301, 24.7712]
+            [
+              121.301,
+              24.7712
+            ],
+            [
+              121.3035,
+              24.7712
+            ],
+            [
+              121.3035,
+              24.773
+            ],
+            [
+              121.301,
+              24.773
+            ],
+            [
+              121.301,
+              24.7712
+            ]
           ]
         ]
       },
@@ -48,7 +80,9 @@
         "valid_from": 2014,
         "valid_to": null,
         "change_type": "loss",
-        "metric": { "area_ha": 0.72 },
+        "metric": {
+          "area_ha": 0.72
+        },
         "source": "UMD/hansen/global_forest_change_2025_v1_13",
         "method": "Hansen lossyear",
         "confidence": 0.9

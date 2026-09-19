@@ -45,11 +45,13 @@ the pixels that *were* observed were water: the water was there, nothing was loo
 So a `min` over the years a pixel was seen as water does not date the water, it dates the
 observation — which is why 石門水庫 (dam 1964) and 曾文水庫 (impounded 1973) came back as arriving
 in the late 1980s, and why only 2.4% of the layer's area dated to 1984 while the mass piled into
-1988-1993. The fix is not a cleverer reduction over a blind record: for the classes JRC already
-asserts were water in its first epoch, `valid_from` is `range_first` and no year is measured at all
-(`PRESENT_AT_START`). Only the arriving classes get a measured onset, and their onsets sit in the
-years the record can actually see. What measurement remains uses `median`, not `mean`, so a dried
-margin cannot drag a whole reservoir across a boundary.
+1988-1993. The fix is not a cleverer reduction over a blind record: the classes present
+throughout take `range_first` and no year is measured at all (`STABLE_FROM_START`). Only the
+arriving classes get a measured onset, and their onsets sit in the years the record can actually
+see; the classes that ended are dated to the year they ended, and the two epoch verdicts to the
+epoch (see the partition `STABLE_FROM_START` / `ARRIVED` / `ENDED` / `EPOCH_VERDICT`). What
+measurement remains uses `median`, not `mean`, so a dried margin cannot drag a whole reservoir
+across a boundary.
 
 **Cover is a separate pass over the same stack.** The change features say what *moved*; the cover
 features say what was *there* in a year. Cover is `waterClass >= WATER_CLASS_SEASONAL`, run-length
@@ -126,33 +128,46 @@ CHANGE_TYPE_BY_TRANSITION: dict[int, str] = {
     10: "loss",  # ephemeral seasonal
 }
 
-#: Classes whose definition asserts water was already present in JRC's first epoch (1984-1999).
-#: These take `valid_from = range_first` and are never dated by measurement — see the module
-#: docstring on why a `min` over a record that is 100% blind in 1985 dates the observation rather
-#: than the water.
+#: How each class is dated. Change is a verdict accumulated since the record's first year --
+#: drawn from the year it applies and for every year after, never closed -- so the only question a
+#: class has to answer is *which year its verdict applies from*. JRC's roster partitions four ways,
+#: each derivable from JRC's own class names (a test derives it; these sets are hand-written and
+#: the test is what keeps them honest, exactly as with `ENDED`):
 #:
-#: `seasonal to permanent` (7) is here despite being a `gain`, and was missed on the first pass
-#: because it reads as an arrival. JRC's class says the pixel was *seasonal water* in epoch 1: the
-#: water was already there and only its permanence changed. Measuring its onset therefore lands it
-#: in the same 1988-93 pile-up as every other pre-record body — and the measurement does not even
-#: answer the question the class poses, because `water_stats_image` tags a year wherever
-#: `waterClass >= WATER_CLASS_SEASONAL`, so a measured onset is the first year the pixel was seen
-#: as *any* water, never the year it became permanent. Dating that would need a second stack
-#: reduced at `config.WATER_CLASS_PERMANENT`; until one exists, the record's start is the honest
-#: `valid_from` and the `gain` still carries the change.
+#:   STABLE_FROM_START  1 permanent, 4 seasonal      -> range_first: present throughout
+#:   ARRIVED            2 new permanent, 5 new seasonal -> measured onset, floored at range_first
+#:   ENDED              3, 6 lost *; 9, 10 ephemeral *  -> first year the yearly record no longer
+#:                                                        sees water there: last_seen + 1
+#:   EPOCH_VERDICT      7 seasonal to permanent,       -> config.GSW_EPOCH_2_FIRST_YEAR, the first
+#:                      8 permanent to seasonal           year of the epoch JRC judged them in
 #:
-#: The membership below is written by hand; what is *derived* is the check on it. A test reads
-#: JRC's own naming — a class is already-water in epoch 1 unless it arrived (`new ...`) or never
-#: held either epoch's stable state (`ephemeral ...`) — and fails if this set disagrees. Editing
-#: `GSW_TRANSITION_CLASSES` therefore does not update this set; it breaks the test, which is the
-#: point. Hand-keeping the list *and* its check is exactly how 7 went missing.
-PRESENT_AT_START: frozenset[int] = frozenset({1, 3, 4, 6, 7, 8})
+#: This replaced `PRESENT_AT_START`, which dated every class that held water in epoch 1 -- the two
+#: `lost *` classes and 8 included -- to the record's start and then closed the `lost *` ones at
+#: `valid_to`. That was dating loss from when the water *was there*, and it put 71% of the loss
+#: layer on frame one and switched it off later: the opposite of accumulating (T-025). The water
+#: that existed before it went is the cover layer's to carry now (T-030), so re-dating loss to the
+#: loss event loses nothing from the map.
+#:
+#: `last_seen + 1`, not `last_seen`: `last_seen` is the median last year a pixel was *seen* as
+#: water -- the last year it existed -- and cover's run for it is `[f, last_seen + 1)`, so the loss
+#: begins the year after, and cover and loss hand off with no year in common, the relation forest
+#: has between `[2000, L)` and `[L, null)`.
+#:
+#: 7 and 8 get the epoch boundary because they are verdicts JRC reaches by comparing its two
+#: epochs, and carry no year of their own; the one date the class itself carries is the first year
+#: of the epoch it was judged in. 1984 would assert the decline (or the gain) held in the epoch
+#: where the pixel was the *other* thing. A measured year would attach a Trace-invented date to a
+#: JRC verdict. Class 7's earlier 1984 (T-021) was about not losing the water from the map, which
+#: cover now answers.
+STABLE_FROM_START: frozenset[int] = frozenset({1, 4})
+ARRIVED: frozenset[int] = frozenset({2, 5})
+EPOCH_VERDICT: frozenset[int] = frozenset({7, 8})
 
-#: Classes where the water actually stopped, and so are the only ones that get a `valid_to`.
-#: `permanent to seasonal` (8) is pointedly not here: that water declined, it did not end, so its
-#: state is still current.
+#: Classes where the water actually stopped, and so are dated to the year it stopped -- the first
+#: year the yearly record no longer sees water there. `permanent to seasonal` (8) is pointedly
+#: not here: that water declined, it did not end, and it is dated by the epoch instead.
 #:
-#: Hand-written and test-checked, exactly as `PRESENT_AT_START` above and for the same reason:
+#: Hand-written and test-checked, exactly as the partition above and for the same reason:
 #: a test derives the expected membership from JRC's naming — a class ended iff it was `lost ...`
 #: (held its state through epoch 1 and was gone by epoch 2) or `ephemeral ...` (came and went
 #: inside the record) — so this set cannot drift without failing. It was correct before that test
@@ -370,7 +385,8 @@ def require_documented(transition_code: int) -> None:
 
     The one gate every derivation goes through first. It used to live inside `derive_change_type`
     alone, and the two date derivations fell through on an unknown code -- `not in ENDED` read as
-    "has not ended", `not in PRESENT_AT_START` as "measure it" -- so an off-roster class came back
+    "has not ended", `not in` the present-at-start set as "measure it" -- so an off-roster class
+    came back
     as open-ended water with a measured onset. `build_feature` was saved only by evaluating
     `change_type=` after the dates, which is kwarg order, which nothing recorded as load-bearing
     (T-022). Now the check is the same function in all three places and cannot be reordered away.
@@ -393,39 +409,24 @@ def derive_change_type(transition_code: int) -> str:
     return CHANGE_TYPE_BY_TRANSITION[transition_code]
 
 
-def derive_valid_from(transition_code: int, measured_first_year: int, range_first: int) -> int:
-    """The year this patch's water begins, measured only where measuring means anything.
+def derive_valid_from(
+    transition_code: int, *, first_seen: int, last_seen: int, range_first: int
+) -> int:
+    """The year this class's verdict applies from -- the one date a change feature carries.
 
-    A class in `PRESENT_AT_START` is one JRC defines as already water in its first epoch, so the
-    honest answer is `range_first` — the record starts with the water already there, and it cannot
-    say when it arrived. Measuring instead is what dated 石門水庫 (dam 1964) to the late 1980s: GSW
-    has no usable observation of Taiwan at all in 1985, so the first year a pixel can be *seen* as
-    water is not the first year it *was* water.
-
-    Arriving classes do get their measured onset, which is sound because their onset is by
-    definition inside the record; it is floored at `range_first` so a median cannot land the
-    feature outside the range the manifest publishes.
+    See the partition above for the rule per class. `first_seen` / `last_seen` are the measured
+    medians of the first and last year the region was seen as water, and each is consulted only by
+    the classes for which it means something: an arrival's onset, an ending's last year. The
+    classes present throughout take the record's start; the two epoch verdicts take the epoch.
     """
     require_documented(transition_code)
-    if transition_code in PRESENT_AT_START:
+    if transition_code in STABLE_FROM_START:
         return range_first
-    return max(measured_first_year, range_first)
-
-
-def derive_valid_to(transition_code: int, measured_last_year: int, range_last: int) -> int | None:
-    """The year this patch's water ends, or `None` if it has not ended.
-
-    Only the `ENDED` classes close. `None` is the B4 convention for a state that is still current,
-    and it is the common case here — including for `permanent to seasonal`, which is `loss` because
-    there is less water than there was, not because the water went away.
-
-    Capped at `range_last`: the record ending is not the state ending, so a median that rounds to
-    the final year would otherwise assert an end the source never observed.
-    """
-    require_documented(transition_code)
-    if transition_code not in ENDED:
-        return None
-    return min(measured_last_year, range_last)
+    if transition_code in ARRIVED:
+        return max(first_seen, range_first)
+    if transition_code in ENDED:
+        return last_seen + 1
+    return config.GSW_EPOCH_2_FIRST_YEAR
 
 
 def encode_run(from_offset: int, to_offset: int | None) -> int:
@@ -553,26 +554,27 @@ def build_feature(
     first_year: int,
     last_year: int,
     range_first: int,
-    range_last: int,
     area_ha: float,
     gsw_asset: str,
 ) -> dict[str, Any]:
-    """Assemble one B4 feature from a vectorized water patch.
+    """Assemble one B4 change feature from a vectorized water patch.
 
     `transition_code` is required rather than optional: it is the class the polygon was segmented
-    on, so every patch has exactly one, and it now decides `change_type`, `valid_from` and
-    `valid_to` as well as `subtype`. An absent class is a bug in the extraction, not a feature to
-    emit without a change signal.
+    on, so every patch has exactly one, and it decides `change_type`, `valid_from` and `subtype`.
+    An absent class is a bug in the extraction, not a feature to emit without a change signal.
 
-    `first_year` / `last_year` are the *measured* medians and are only consulted for the classes
-    that actually need them — see `derive_valid_from` and `derive_valid_to`.
+    `valid_to` is always None: change accumulates, and the schema refuses a change feature that
+    closes. `first_year` / `last_year` are the *measured* medians and are only consulted for the
+    classes that need them -- see `derive_valid_from`.
     """
     from trace_pipeline.schema import TraceFeature
 
     feature = TraceFeature(
         domain=WaterDomain.id,
-        valid_from=derive_valid_from(transition_code, first_year, range_first),
-        valid_to=derive_valid_to(transition_code, last_year, range_last),
+        valid_from=derive_valid_from(
+            transition_code, first_seen=first_year, last_seen=last_year, range_first=range_first
+        ),
+        valid_to=None,
         change_type=derive_change_type(transition_code),
         metric={"area_ha": round(area_ha, 4)},
         source=gsw_asset,
@@ -656,15 +658,15 @@ class WaterDomain(Domain):
             "water that was only ever ephemeral, seasonal water that went, and permanent water "
             "that dropped to seasonal but is still present. Permanent water that vanished outright "
             f"is about {config.WATER_LOST_PERMANENT_PCT:.1f}% of the layer. "
-            "Loss is dated from when the water was there, not from when it went. The three "
-            "classes JRC says already held water in its first epoch — the two it calls lost, "
-            "and the decline just described — all carry the record's "
-            f"first year, so about {config.WATER_LOSS_DATED_AT_START_PCT:.0f}% of this "
-            "layer's loss is already drawn in the earliest frames: water that was there then "
-            "and was lost at some point over the decades that followed, not water lost that "
-            "year. It reads as a coastline because the seasonal-grade classes sit on tidal "
-            "flats, river mouths and fish ponds down the west coast, while mountain "
-            "reservoirs stay permanent and never join it. "
+            # Change accumulates and cover is where the water was: the reader has to know which
+            # layer answers which question, or the first frame reads as an event again.
+            "Change accumulates: a change is drawn from the year it applies and for every later "
+            "year, and the cover layer is where to see what existed in a given year. Loss is "
+            "dated to the first year the yearly record no longer sees water where JRC says it "
+            "was lost or ephemeral. The two classes JRC judges by comparing its epochs, seasonal "
+            "water that became permanent and permanent water that dropped to seasonal, carry no "
+            f"year of their own and are drawn from {config.GSW_EPOCH_2_FIRST_YEAR}, the first "
+            "year of the epoch in which JRC made that judgement. "
             f"Isolated single pixels (under about {pixel_ha:.2f} ha) are not mapped, keeping about "
             f"{config.WATER_RETAINED_PCT:.0f}% of the water that survives the managed-land rule "
             "below, so "
@@ -687,9 +689,9 @@ class WaterDomain(Domain):
             "Taiwan. "
             "Regions where the source's two products disagree are left out on top of that: where "
             "the transition band calls a region arriving or ended but the yearly record never sees "
-            "water there, no onset can be dated, and the region is dropped rather than given a "
-            "guessed year. Each extraction run reports that count; it is not yet folded into the "
-            "percentages above. "
+            "water there, or saw it there in the record's final year, no year can be dated, and "
+            "the region is dropped rather than given a guessed one, about "
+            f"{config.WATER_UNDATABLE_DROPPED_PCT:.2f}% of the change area that passes the sieve. "
             "Gain means a body holds water more of the time than the early record shows, not that "
             "water appeared where there was none: satellite revisit roughly doubled over the "
             "period, so a body that was always seasonally wet is caught more often later and can "
@@ -1089,12 +1091,15 @@ class WaterDomain(Domain):
 
         cells = self.grid_cells(aoi)
         total_cells = len(cells)
-        # A region whose class needs a measured year but whose yearly stack never saw water there
-        # — the two JRC products (aggregate `transition` vs `YearlyHistory`) disagreeing on that
-        # pixel. Skipped rather than dated from `range_first`, which would assert the water was
-        # present from the start of the record, and counted rather than swallowed so the run says
-        # how much it dropped.
+        # A region whose class needs a measured year the yearly stack cannot give it -- either it
+        # never saw water there (the two JRC products, aggregate `transition` and `YearlyHistory`,
+        # disagreeing on that pixel), or an ending's last water year is the record's last year, so
+        # the end itself was never observed. Skipped rather than dated from the record's edge, which
+        # would assert something the source never saw; counted, and its area summed, so the run
+        # says how much it dropped and config.WATER_UNDATABLE_DROPPED_PCT can quote it.
         undatable = 0
+        undatable_ha = 0.0
+        kept_ha = 0.0
 
         for index, cell in enumerate(cells, start=1):
             collection = self.patches_for_cell(cell)
@@ -1108,13 +1113,14 @@ class WaterDomain(Domain):
                 measured_first = props.get("first_year")
                 measured_last = props.get("last_year")
 
-                needs_onset = transition_code not in PRESENT_AT_START
+                needs_onset = transition_code in ARRIVED
                 needs_end = transition_code in ENDED
-                if (needs_onset and measured_first is None) or (
-                    needs_end and measured_last is None
-                ):
+                end_unobserved = measured_last is None or round(measured_last) + 1 > last
+                if (needs_onset and measured_first is None) or (needs_end and end_unobserved):
                     undatable += 1
+                    undatable_ha += props["area_ha"]
                     continue
+                kept_ha += props["area_ha"]
 
                 features.append(
                     build_feature(
@@ -1126,7 +1132,6 @@ class WaterDomain(Domain):
                         first_year=round(measured_first) if measured_first is not None else first,
                         last_year=round(measured_last) if measured_last is not None else last,
                         range_first=first,
-                        range_last=last,
                         area_ha=props["area_ha"],
                         gsw_asset=asset,
                     )
@@ -1139,9 +1144,11 @@ class WaterDomain(Domain):
             )
 
         if undatable:
+            share = 100 * undatable_ha / (kept_ha + undatable_ha)
             print(
-                f"  {undatable:,} patches skipped: class needs a measured year the yearly "
-                f"stack does not have",
+                f"  {undatable:,} patches ({undatable_ha:,.1f} ha, {share:.2f}% of post-sieve "
+                f"change area) skipped: class needs a measured year the yearly stack does not "
+                f"have -- WATER_UNDATABLE_DROPPED_PCT",
                 flush=True,
             )
         print(f"  {len(features):,} water change patches, GSW {asset}", flush=True)
