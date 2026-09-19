@@ -16,9 +16,9 @@ import type {
   LineLayerSpecification,
 } from 'maplibre-gl';
 
-import { CLEARED, styleFor } from '@/domains/colors';
+import { styleFor } from '@/domains/colors';
 import type { DomainManifestEntry } from '@/domains/manifest';
-import { CHANGE_TYPE_ORDER } from '@/types/feature';
+import { CHANGE_TYPE_ORDER, KIND_OF } from '@/types/feature';
 import type { ChangeType } from '@/types/feature';
 
 /** Image id for the diagonal hatch registered on the map. */
@@ -36,12 +36,12 @@ const SCALE_SPLIT_ZOOM = 11;
 export const sourceId = (domainId: string) => `trace-${domainId}`;
 
 /**
- * The years a domain's layers are split across — one *cohort* per year of its coverage.
+ * The years a *change* role's layers are split across — one cohort per year of the coverage.
  *
  * Time is still a feature attribute: each cohort selects on `valid_from`, and the manifest's
  * range is what decides how many there are. What changed is that the selection is **fixed** at
  * build time rather than rewritten as the slider moves, which is what makes the animation free.
- * See `cohortFilter`.
+ * See `cohortFilter`. Cover roles use a different split — see `intervalNodes`.
  */
 export function cohortYears(entry: DomainManifestEntry): number[] {
   const years: number[] = [];
@@ -62,12 +62,12 @@ export function cohortYears(entry: DomainManifestEntry): number[] {
  * every feature from the start of the range to the current year — 2,656 of them at 2001 against
  * 91,088 at 2025, which is exactly why playback used to begin quickly and grind to a crawl.
  *
- * **Precondition: features are open-ended.** A cohort is switched on for every year at or after
- * its own and never switched off again, so a feature that *stops* being true — a non-null
- * `valid_to` — keeps drawing past its end. Forest holds to this. Water does **not**: JRC's `lost *`
- * and `ephemeral *` transition classes carry a real `valid_to`, and roughly 42k water features are
- * therefore drawn for years in which they no longer existed. Tracked as T-024; the fix is a second
- * cohort axis, which is a change to this function and not to any caller of it.
+ * **Precondition: change features are open-ended.** A cohort is switched on for every year at or
+ * after its own and never switched off again, so this model is only correct for features that
+ * never stop being true — which is what the taxonomy says of every `change`-kind feature
+ * (`valid_to: null`, always; `schema/feature.schema.json`). Cover is the kind that ends, and it
+ * gets `intervalFilter` instead. `layerSpec.tiles.test.ts` checks the precondition against the
+ * built tiles rather than trusting the comment.
  */
 function cohortFilter(
   entry: DomainManifestEntry,
@@ -82,16 +82,107 @@ function cohortFilter(
   return ['all', begins, test] as FilterSpecification;
 }
 
+/**
+ * A node of the interval tree a *cover* role's layers are split across.
+ *
+ * Half-open `[start, end)`, like the validity it is matched against. `parent` is what makes a
+ * node's filter *canonical* — see `intervalFilter`.
+ */
+export interface IntervalNode {
+  start: number;
+  end: number;
+  parent: IntervalNode | null;
+}
+
+/**
+ * A sentinel past any year the schema allows, so an absent `valid_to` reads as "never ends".
+ *
+ * Absent rather than null: tippecanoe drops null-valued attributes, so an open-ended feature
+ * simply has no `valid_to` in the tile, and `['get', 'valid_to']` returns null for it.
+ */
+const OPEN_ENDED_YEAR = 9999;
+
+/**
+ * The binary tree over a domain's years that cover roles are split across — `2N − 1` nodes.
+ *
+ * Cover is the kind of state that *ends*: a forest block stands `[2000, L)` and is gone from L on.
+ * Splitting it by `valid_from` alone, as change roles are, would draw it for every year after L
+ * as well. And the obvious fix — one layer per year with a `from <= Y < to` filter — duplicates
+ * every open-ended feature into every year's bucket, which for forest is the whole canopy 26 times
+ * over in GPU memory. Paired `(from, to)` cohorts are correct but quadratic in N and their count
+ * depends on the data.
+ *
+ * A segment tree is neither. Every half-open interval over N years decomposes into at most
+ * `2⌈log₂N⌉` *canonical* nodes — the maximal nodes it fully covers — and a feature is placed in
+ * exactly those. Each year is inside exactly one of them, so nothing draws twice; the common cases
+ * (`[2000, null)`, `[1984, null)`) are the root alone; and the layer count is `2N − 1` whatever
+ * the data holds. Pre-order, so a role's layers stay contiguous in draw order.
+ */
+export function intervalNodes(entry: DomainManifestEntry): IntervalNode[] {
+  let nodes = intervalCache.get(entry);
+  if (nodes) return nodes;
+
+  nodes = [];
+  const split = (start: number, end: number, parent: IntervalNode | null) => {
+    const node: IntervalNode = { start, end, parent };
+    nodes!.push(node);
+    if (end - start > 1) {
+      const mid = Math.floor((start + end) / 2);
+      split(start, mid, node);
+      split(mid, end, node);
+    }
+  };
+  split(entry.temporal.start, entry.temporal.end + 1, null);
+
+  intervalCache.set(entry, nodes);
+  return nodes;
+}
+
+const intervalCache = new WeakMap<DomainManifestEntry, IntervalNode[]>();
+
+/** Whether a feature's validity covers the whole of a node. */
+const covers = (node: IntervalNode): FilterSpecification =>
+  [
+    'all',
+    ['<=', ['get', 'valid_from'], node.start],
+    ['>=', ['coalesce', ['get', 'valid_to'], OPEN_ENDED_YEAR], node.end],
+  ] as FilterSpecification;
+
+/**
+ * One node's share of a cover role: the features whose validity covers this node but not its
+ * parent — which is exactly the canonical decomposition, so each year of a feature is claimed by
+ * one node and no other.
+ *
+ * The parent's bounds are constants at build time, so like `cohortFilter` every clause here is
+ * fixed and the year is animated by opacity alone. A node is shown for year Y iff
+ * `start <= Y < end`; the shown set is the root-to-leaf path for Y, and stepping to Y+1 flips at
+ * most `2·(depth − 1)` of them — a bound on writes per step that does not depend on the data.
+ */
+function intervalFilter(node: IntervalNode, test: FilterSpecification): FilterSpecification {
+  const canonical: FilterSpecification = node.parent
+    ? (['all', covers(node), ['!', covers(node.parent)]] as FilterSpecification)
+    : covers(node);
+
+  return ['all', canonical, test] as FilterSpecification;
+}
+
 /** Selects exactly one change type. Every role filters on one of these. */
 const isType = (changeType: ChangeType): FilterSpecification =>
   ['==', ['get', 'change_type'], changeType] as FilterSpecification;
 
 /**
+ * Which split a state's layers get. Decided by the *kind* — cover ends, change does not — so it
+ * is the taxonomy that picks the model, never the domain.
+ */
+const cohortModelFor = (changeType: ChangeType): 'from' | 'interval' =>
+  KIND_OF[changeType] === 'cover' ? 'interval' : 'from';
+
+/**
  * The width ramp that keeps a sub-pixel patch visible.
  *
  * Shared by every line layer here because the problem is shared: below `SCALE_SPLIT_ZOOM` the
- * patches are smaller than a pixel, whether they are being drawn as loss or subtracted from an
- * cover, and a fill cannot render either. See `outlineRole` for the full reasoning.
+ * patches are smaller than a pixel, whether they are being drawn as loss or as the edge of a
+ * cover block, and a fill cannot render either. See `outlineRole` for the full reasoning.
  */
 const MARK_WIDTH = [
   'interpolate',
@@ -113,12 +204,13 @@ type BuiltRole = { type: 'fill' | 'line'; paint: Record<string, unknown> };
 /**
  * One layer a domain owns, before it is split into cohorts.
  *
- * `changeType` is which *toggle* shows this layer, which is not always the change type it filters
- * on — the cleared patches filter on `loss` but are shown by the cover toggle. See `rolesFor`.
+ * `changeType` is which *toggle* shows this layer and which state it filters on; `cohorts` is
+ * how its layers are split across the years, and follows from the change type's kind.
  */
 interface Role {
   key: string;
   changeType: ChangeType;
+  cohorts: 'from' | 'interval';
   test: FilterSpecification;
   paint: (entry: DomainManifestEntry) => BuiltRole;
 }
@@ -142,6 +234,7 @@ function outlineRole(key: string, changeType: ChangeType, test: FilterSpecificat
   return {
     key,
     changeType,
+    cohorts: cohortModelFor(changeType),
     test,
     paint: (entry) => {
       const style = styleFor(entry.hue, changeType);
@@ -179,6 +272,7 @@ function stateRoles(entry: DomainManifestEntry, changeType: ChangeType): Role[] 
     {
       key: `fill-${changeType}`,
       changeType,
+      cohorts: cohortModelFor(changeType),
       test,
       paint: (e) => ({
         type: 'fill' as const,
@@ -195,6 +289,7 @@ function stateRoles(entry: DomainManifestEntry, changeType: ChangeType): Role[] 
     roles.push({
       key: `pattern-${changeType}`,
       changeType,
+      cohorts: cohortModelFor(changeType),
       test,
       // A second fill carrying only the pattern. fill-pattern would replace fill-color on a single
       // layer, and the rule is that loss is signalled by colour *and* texture, never either alone.
@@ -215,25 +310,30 @@ function stateRoles(entry: DomainManifestEntry, changeType: ChangeType): Role[] 
  * This used to be a fixed table of seven roles tagged with one of two mutually exclusive views, and
  * both halves of that were wrong. The views were exclusive where they should have been additive —
  * forest could show its canopy or its losses but never both, which is the one comparison the map
- * exists to make. And the table was fixed, so water built `cover-*` and `cleared-*` cohorts for a
- * cover it does not have: 4 roles across 38 years, 152 layers that could never match a feature.
+ * exists to make. And the table was fixed, so water built cover cohorts for a cover it does not
+ * have: layers that could never match a feature, switched between as if they might.
  *
  * Now a role exists only if the manifest says the domain has something to put in it, and each role
- * names the change type whose toggle shows it. Array order is draw order, and it is load-bearing
- * twice over: the cleared patches are painted *over* the cover to cut holes in it, so they must
- * follow it; and the states run in `CHANGE_TYPE_ORDER` so loss lands on top of whatever it happened
- * to.
+ * names the change type whose toggle shows it. Array order is draw order: cover first, as the
+ * ground the changes happened to, then the states in `CHANGE_TYPE_ORDER` so loss lands on top.
+ *
+ * There used to be a third thing here — `cleared-*` roles that painted loss patches over the cover
+ * in the ground colour to cut holes in it, because a cover that never ended had to be shown ending
+ * somehow. That was this file deriving cover from loss. Cover now carries its own `valid_to`
+ * (T-029) and its layers switch off at it (`intervalFilter`), so the holes are in the data and
+ * nothing here needs to fake them.
  */
 function buildRoles(entry: DomainManifestEntry): Role[] {
   const present = new Set(entry.changeTypes ?? []);
   const roles: Role[] = [];
 
   if (present.has('cover')) {
-    // The baseline mass the holes are cut from. More opaque than a change fill, which is an
-    // accumulation rather than a ground state.
+    // The ground state. More opaque than a change fill, which is an accumulation rather than a
+    // mass, and drawn for exactly the years its own validity says — see `intervalNodes`.
     roles.push({
       key: 'cover-fill',
       changeType: 'cover',
+      cohorts: cohortModelFor('cover'),
       test: isType('cover'),
       paint: (e) => ({
         type: 'fill' as const,
@@ -241,35 +341,6 @@ function buildRoles(entry: DomainManifestEntry): Role[] {
       }),
     });
     roles.push(outlineRole('cover-outline', 'cover', isType('cover')));
-
-    // Subtraction done with paint, because MapLibre fills cannot subtract. Filters on `loss` but is
-    // shown by the *cover* toggle: taking out what has gone is part of drawing a baseline
-    // honestly, not an overlay the reader opts into. A cover shown without its holes would claim
-    // the 2000 canopy is still standing.
-    if (present.has('loss')) {
-      roles.push({
-        key: 'cleared-fill',
-        changeType: 'cover',
-        test: isType('loss'),
-        // Opaque on purpose. See CLEARED for why it is the colour it is.
-        paint: () => ({
-          type: 'fill' as const,
-          paint: { 'fill-color': CLEARED, 'fill-opacity': 1 },
-        }),
-      });
-      roles.push({
-        key: 'cleared-outline',
-        changeType: 'cover',
-        test: isType('loss'),
-        // Without this the cover would look static at island view: the holes are the same
-        // sub-pixel patches as the loss layer, so at z8 a fill alone cuts nothing visible and the
-        // mass would appear not to change as the years pass.
-        paint: () => ({
-          type: 'line' as const,
-          paint: { 'line-color': CLEARED, 'line-width': MARK_WIDTH, 'line-opacity': 1 },
-        }),
-      });
-    }
   }
 
   for (const changeType of CHANGE_TYPE_ORDER) {
@@ -299,8 +370,79 @@ function rolesFor(entry: DomainManifestEntry): Role[] {
   return roles;
 }
 
-const cohortLayerId = (domainId: string, key: string, cohort: number) =>
-  `trace-${domainId}-${key}-${cohort}`;
+/**
+ * One layer of a role, whichever way the role is split: its id, its fixed filter, and whether it
+ * is shown for a year. Everything below walks these, so the two cohort models meet in exactly one
+ * place and no caller has to know which it is holding.
+ */
+interface Cohort {
+  id: string;
+  filter: FilterSpecification;
+  shown: (year: number) => boolean;
+}
+
+/** `trace-forest-fill-loss-2013` for a year cohort; `trace-forest-cover-fill-2001-2026` for a node. */
+const cohortLayerId = (domainId: string, key: string, cohort: number | IntervalNode) =>
+  typeof cohort === 'number'
+    ? `trace-${domainId}-${key}-${cohort}`
+    : `trace-${domainId}-${key}-${cohort.start}-${cohort.end}`;
+
+function buildCohorts(entry: DomainManifestEntry, role: Role): Cohort[] {
+  if (role.cohorts === 'interval') {
+    return intervalNodes(entry).map((node) => ({
+      id: cohortLayerId(entry.id, role.key, node),
+      filter: intervalFilter(node, role.test),
+      shown: (year) => node.start <= year && year < node.end,
+    }));
+  }
+  return cohortYears(entry).map((cohort) => ({
+    id: cohortLayerId(entry.id, role.key, cohort),
+    filter: cohortFilter(entry, cohort, role.test),
+    shown: (year) => cohort <= year,
+  }));
+}
+
+/**
+ * `buildCohorts(entry, role)`, cached per domain/role — for the same reason as `builtFor`: this
+ * is walked on every year commit, and its output never changes for the life of a manifest.
+ * Caching also makes "the filter never changes" true by identity, not just by construction.
+ */
+const cohortsCache = new WeakMap<DomainManifestEntry, Map<string, Cohort[]>>();
+
+function cohortsOf(entry: DomainManifestEntry, role: Role): Cohort[] {
+  let perEntry = cohortsCache.get(entry);
+  if (!perEntry) {
+    perEntry = new Map();
+    cohortsCache.set(entry, perEntry);
+  }
+  let cohorts = perEntry.get(role.key);
+  if (!cohorts) {
+    cohorts = buildCohorts(entry, role);
+    perEntry.set(role.key, cohorts);
+  }
+  return cohorts;
+}
+
+/**
+ * The most paint writes one year step can cost this domain, whatever the year.
+ *
+ * A change role flips exactly one cohort per step. A cover role's shown set is a root-to-leaf
+ * path, so a step flips at most the two paths' symmetric difference: `2·(depth − 1)`, the root
+ * being on both. The test asserts the real per-step counts stay under this, and that they read
+ * the same backwards — the property that rules out anything accumulating.
+ */
+export function maxWritesPerStep(entry: DomainManifestEntry): number {
+  const depth = intervalNodes(entry).reduce((max, node) => {
+    let d = 1;
+    for (let n = node.parent; n; n = n.parent) d += 1;
+    return Math.max(max, d);
+  }, 0);
+
+  return rolesFor(entry).reduce(
+    (sum, role) => sum + (role.cohorts === 'interval' ? 2 * (depth - 1) : 1),
+    0,
+  );
+}
 
 /**
  * The opacity channel a role is animated through, and the value it holds when shown.
@@ -360,16 +502,13 @@ function builtFor(entry: DomainManifestEntry, role: Role): BuiltRole {
  * removed, so that flipping a toggle never refetches a tile.
  */
 export function layerIdsFor(entry: DomainManifestEntry): string[] {
-  return rolesFor(entry).flatMap((role) =>
-    cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
-  );
+  return rolesFor(entry).flatMap((role) => cohortsOf(entry, role).map((c) => c.id));
 }
 
 /**
  * The layers the reader has asked to see. Drives the visibility switch in `useDomainLayers`.
  *
- * A role is shown when *its* change type is selected, which for the cleared patches is `extent` and
- * not the `loss` they filter on — see `buildRoles`.
+ * A role is shown when its own change type is selected.
  */
 export function layerIdsForSelection(
   entry: DomainManifestEntry,
@@ -377,9 +516,7 @@ export function layerIdsForSelection(
 ): string[] {
   return rolesFor(entry)
     .filter((role) => selected.has(role.changeType))
-    .flatMap((role) =>
-      cohortYears(entry).map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
-    );
+    .flatMap((role) => cohortsOf(entry, role).map((c) => c.id));
 }
 
 /**
@@ -395,9 +532,9 @@ export function layerIdsForSelection(
  */
 export function layerIdsForYear(entry: DomainManifestEntry, year: number): string[] {
   return rolesFor(entry).flatMap((role) =>
-    cohortYears(entry)
-      .filter((cohort) => cohort <= year)
-      .map((cohort) => cohortLayerId(entry.id, role.key, cohort)),
+    cohortsOf(entry, role)
+      .filter((c) => c.shown(year))
+      .map((c) => c.id),
   );
 }
 
@@ -405,8 +542,8 @@ export function layerIdsForYear(entry: DomainManifestEntry, year: number): strin
  * Every cohort's opacity for a given year, keyed by layer id and paint property.
  *
  * This is the animation. Each entry is a *constant* paint value, which MapLibre applies without
- * touching tile data at all — no filter change, no source reload, no re-tessellation. Cohorts up
- * to the year draw at their role's own opacity; the rest sit at zero.
+ * touching tile data at all — no filter change, no source reload, no re-tessellation. Cohorts the
+ * year falls in draw at their role's own opacity; the rest sit at zero.
  */
 export function opacityUpdatesFor(
   entry: DomainManifestEntry,
@@ -415,13 +552,8 @@ export function opacityUpdatesFor(
   return rolesFor(entry).flatMap((role) => {
     const { key, shown } = opacityChannel(builtFor(entry, role));
 
-    return cohortYears(entry).map(
-      (cohort) =>
-        [cohortLayerId(entry.id, role.key, cohort), key, cohort <= year ? shown : 0] as [
-          string,
-          string,
-          number,
-        ],
+    return cohortsOf(entry, role).map(
+      (c) => [c.id, key, c.shown(year) ? shown : 0] as [string, string, number],
     );
   });
 }
@@ -443,26 +575,25 @@ export function layersFor(
   // in the same order. There is no second list to fall out of step with.
   //
   // Roles are the outer loop and cohorts the inner one, which keeps the role order — and with it
-  // the rule that cleared patches are painted over the extent they cut holes in, and that loss is
-  // drawn last. Interleaving the two would scatter each role's cohorts through the draw order and
-  // lose that.
+  // the rule that cover is the ground and loss is drawn last. Interleaving the two would scatter
+  // each role's cohorts through the draw order and lose that.
   const layers = rolesFor(entry).flatMap((role) => {
     const built = builtFor(entry, role);
     const { key, shown } = opacityChannel(built);
     const visibility = selected.has(role.changeType) ? 'visible' : 'none';
 
-    return cohortYears(entry).map(
-      (cohort) =>
+    return cohortsOf(entry, role).map(
+      (c) =>
         ({
-          id: cohortLayerId(entry.id, role.key, cohort),
+          id: c.id,
           type: built.type,
           source,
           'source-layer': entry.tiles.sourceLayer,
-          filter: cohortFilter(entry, cohort, role.test),
+          filter: c.filter,
           layout: { visibility },
           paint: {
             ...built.paint,
-            [key]: cohort <= year ? shown : 0,
+            [key]: c.shown(year) ? shown : 0,
             // A cohort appears the instant its year arrives. The default 300ms fade would still be
             // running two years later at playback speed, leaving the map showing a half-drawn year
             // while the readout named it outright.

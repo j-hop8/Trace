@@ -58,7 +58,7 @@ const RELOAD_TIMEOUT_MS = 15000;
  * would rebuild the map whenever a toggle changed.
  *
  * Sources are added once per domain and never swapped, and the year is applied as **opacity**, not
- * as a filter — see `cohortFilter` in layerSpec for why the layers are split by year.
+ * as a filter — see `cohortFilter` and `intervalNodes` in layerSpec for why the layers are split.
  *
  * That distinction is the whole performance story. `setFilter` routes through `Style._updateLayer`
  * to `_reloadSource`, which re-parses every loaded tile in the worker: decode, re-filter,
@@ -181,7 +181,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         const spec = layersFor(entry, year, selectedTypesFor(entry.id));
         map.addSource(spec.sourceId, spec.source);
         // Under the basemap's labels, not over them. Appending with no `beforeId` puts data on
-        // top of everything, and the extent view is a near-solid mass -- it covered every place
+        // top of everything, and the cover layer is a near-solid mass -- it covered every place
         // name in the central range, so the reader could see the forest and not where it was.
         // Found by type rather than by id so it survives a basemap whose label layer is renamed.
         const firstSymbol = map.getStyle().layers.find((layer) => layer.type === 'symbol')?.id;

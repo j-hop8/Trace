@@ -39,21 +39,30 @@ appear for a state the data cannot fill, and a layer is never built with no way 
 and one tileset per domain covers every year — never a tileset per year. This is why there is no
 tile server.
 
-Inside that tileset the slider animates **opacity, not filters**. Layers are split into one *cohort
-per year* (`cohortFilter` in [layerSpec.ts](web/src/domains/layerSpec.ts)), each carrying a filter
-fixed at build time, and a year is shown by setting a constant opacity on them. This replaced a
-single layer with a live `["<=", ["get", "valid_from"], year]` filter, because `setFilter` makes
-MapLibre re-parse every loaded tile in the worker: each step re-tessellated everything from the
-start of the range to the current year — 2,656 features at 2001 against 91,088 at 2025 — so
-playback started fast and slowed to a crawl. A constant paint value is the only style change
-MapLibre applies without touching tile data, and cohorts are what turn the year into one.
+Inside that tileset the slider animates **opacity, not filters**. Every layer carries a filter
+fixed at build time, and a year is shown by setting a constant opacity on the layers it falls in.
+This replaced a single layer with a live `["<=", ["get", "valid_from"], year]` filter, because
+`setFilter` makes MapLibre re-parse every loaded tile in the worker: each step re-tessellated
+everything from the start of the range to the current year — 2,656 features at 2001 against
+91,088 at 2025 — so playback started fast and slowed to a crawl. A constant paint value is the
+only style change MapLibre applies without touching tile data. A data-driven paint expression is
+*not* one: MapLibre reloads the source for that too (`style_layer.ts` returns `isDataDriven` from
+`setPaintProperty`, and `style.ts` then reloads), so the year can never be an expression either.
 
-Cohorts assume features are **open-ended** (`valid_to: null`): a cohort switches on at its year and
-never switches off. Forest holds to this. **Water does not** — JRC's `lost *` and `ephemeral *`
-transition classes carry a real `valid_to`, so roughly 42k water features are drawn for years in
-which they no longer existed. Tracked as `T-024`; the fix is a second cohort axis, not a re-run.
-Until it lands, a domain that ends a feature's validity is knowingly mis-drawn rather than
-unsupported.
+The split follows the kind of state ([layerSpec.ts](web/src/domains/layerSpec.ts)):
+
+- **Change roles** are one *cohort per year*, selecting on `valid_from` (`cohortFilter`). A cohort
+  switches on at its year and never off, which is correct precisely because change never closes.
+- **Cover roles** are the nodes of an *interval tree* over the range — `2N − 1` layers, each
+  selecting the features whose `[valid_from, valid_to)` covers that node but not its parent
+  (`intervalFilter`). That is the canonical decomposition, so each year of a feature is claimed
+  by exactly one node and a feature that ends is drawn for exactly its years. Shown at year Y is
+  the root-to-leaf path through Y, so a step flips at most `2·(depth − 1)` layers per cover role
+  — about 10 — whatever the data holds. `layerSpec.test.ts` pins this with MapLibre's own filter
+  evaluator; `layerSpec.tiles.test.ts` checks it against every built tileset.
+
+Cover used to be drawn by painting loss patches over a never-ending baseline in the ground colour
+to cut holes in it (`cleared-*`). That was the web deriving cover from loss; it is gone.
 
 **3. Every feature carries the full B4 schema.** `domain`, `subtype`, `valid_from`, `valid_to`,
 `change_type`, `metric`, `source`, `method`, `confidence` — defined once in

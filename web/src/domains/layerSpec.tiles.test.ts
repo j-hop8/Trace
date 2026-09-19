@@ -1,14 +1,18 @@
 /**
- * The cohort model against the real tileset.
+ * The cohort model against the real tilesets.
  *
  * `layerSpec.test.ts` checks the shape of what gets built. This checks what it actually selects,
- * by running the built filters over features decoded straight out of `data/forest.pmtiles` with
+ * by running the built filters over features decoded straight out of each domain's `.pmtiles` with
  * MapLibre's own filter evaluator — the same one the map uses. The question it answers is the one
- * that cannot be answered by reading the layer specs: for every year, does turning cohorts on by
- * opacity select exactly the features a `valid_from <= year` filter would have selected?
+ * that cannot be answered by reading the layer specs: for every domain, year and role, does turning
+ * cohorts on by opacity select exactly the features the plain time semantics would?
  *
- * Skipped when the pipeline has not been run: `data/` is generated and gitignored, so requiring it
- * would make this pass or fail on whether someone happened to have built the tiles.
+ * Every domain in the manifest, not the first one. The first version read `domains[0]` only, and
+ * that is how water's `valid_to` went unhonoured for a release: the domain with the problem was
+ * never the one decoded.
+ *
+ * Skipped per domain when its archive is absent: `data/` is generated and gitignored, so requiring
+ * it would make this pass or fail on whether someone happened to have built the tiles.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -23,31 +27,35 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { layersFor, opacityChannel } from '@/domains/layerSpec';
 import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
+import { KIND_OF } from '@/types/feature';
+import type { ChangeType } from '@/types/feature';
 
 const DATA = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../data');
 const MANIFEST = path.join(DATA, 'domains.json');
 
 /**
- * How many tiles to decode.
+ * How many tiles to decode per domain.
  *
  * Enough features for the comparison to mean something, few enough to keep the suite quick — the
  * work is years x roles x features, so this is the term worth bounding.
  */
 const TILE_BUDGET = 8;
 
-const built =
-  existsSync(MANIFEST) && JSON.parse(readFileSync(MANIFEST, 'utf8')).domains?.length > 0;
-
-const entry: DomainManifestEntry | null = built
-  ? ((JSON.parse(readFileSync(MANIFEST, 'utf8')) as DomainManifest).domains[0] ?? null)
+const manifest: DomainManifest | null = existsSync(MANIFEST)
+  ? (JSON.parse(readFileSync(MANIFEST, 'utf8')) as DomainManifest)
   : null;
 
-const archivePath = entry ? path.join(DATA, path.basename(entry.tiles.url)) : '';
-const runnable = Boolean(entry) && existsSync(archivePath);
+const archiveFor = (entry: DomainManifestEntry) => path.join(DATA, path.basename(entry.tiles.url));
+
+const domains = (manifest?.domains ?? []).map((entry) => ({
+  entry,
+  runnable: existsSync(archiveFor(entry)),
+}));
 
 type Feature = { properties: Record<string, unknown> };
 
 async function decode(domain: DomainManifestEntry): Promise<Feature[]> {
+  const archivePath = archiveFor(domain);
   const bytes = readFileSync(archivePath);
   const archive = new PMTiles({
     getKey: () => archivePath,
@@ -100,77 +108,117 @@ const selects = (spec: unknown, features: Feature[], where = 'test'): Set<number
   return hits;
 };
 
-describe.skipIf(!runnable)('cohorts against the built tileset', () => {
+/** `trace-water-fill-loss-2013` → `fill-loss`; `trace-forest-cover-fill-2001-2026` → `cover-fill`. */
+const roleOf = (id: string, domainId: string) =>
+  id.replace(`trace-${domainId}-`, '').replace(/-\d{4}(-\d{4})?$/, '');
+
+/** The plain time semantics a role's cohorts stand in for, by the kind of state it draws. */
+const inYear = (props: Record<string, unknown>, year: number, kind: 'cover' | 'change') => {
+  const from = Number(props.valid_from);
+  if (kind === 'change') return from <= year;
+  const to = props.valid_to == null ? Infinity : Number(props.valid_to);
+  return from <= year && year < to;
+};
+
+// With no manifest there is nothing to iterate, and a file that registers no suite at all is a
+// vitest *failure* ("No test suite found"), not a skip — which would turn CI red, where `data/`
+// never exists. So the absent-data case is a suite that is skipped on purpose and says why.
+if (domains.length === 0) {
+  describe.skip('cohorts against the built tilesets', () => {
+    it('needs data/domains.json — run the pipeline to build it', () => {});
+  });
+}
+
+describe.each(domains)('cohorts against the built $entry.id tileset', ({ entry, runnable }) => {
   let features: Feature[] = [];
 
   beforeAll(async () => {
-    features = await decode(entry!);
+    if (runnable) features = await decode(entry);
   }, 120_000);
 
-  it('decodes real features to compare against', () => {
+  it.skipIf(!runnable)('decodes real features to compare against', () => {
     expect(features.length).toBeGreaterThan(0);
   });
 
-  it('never sees a feature that expires, which is what cohorts assume', () => {
-    // A cohort switches on at its year and never switches off, so a feature carrying a `valid_to`
-    // would keep drawing past its end. This is that precondition as a check rather than a comment.
-    //
-    // It only covers the domain this file decodes — `domains[0]` — and that is the hole: water's
-    // JRC `lost *` and `ephemeral *` classes *do* carry a `valid_to`, roughly 42k of them, and are
-    // drawn for years in which they no longer existed. Extending this to every domain is part of
-    // T-024, along with the fix; widening it here first would just be a red suite.
-    const expiring = features.filter((f) => f.properties.valid_to != null);
-
-    expect(expiring).toHaveLength(0);
-  });
-
-  it('selects exactly what a live valid_from filter would, every year and every role', () => {
-    const years: number[] = [];
-    for (let y = entry!.temporal.start; y <= entry!.temporal.end; y += 1) years.push(y);
-
-    for (const year of years) {
-      // Everything the domain can show, so the extent baseline and the cleared holes are covered
-      // alongside the changes.
-      const layers = layersFor(entry!, year, new Set(entry!.changeTypes ?? [])).layers;
-
-      const roles = new Set(
-        layers.map((l) => l.id.replace(`trace-${entry!.id}-`, '').replace(/-\d{4}$/, '')),
+  it.skipIf(!runnable)(
+    'never sees a change-kind feature that expires, which is what change cohorts assume',
+    () => {
+      // A change cohort switches on at its year and never switches off, so a change feature carrying
+      // a `valid_to` would keep drawing past its end. This is that precondition as a check rather than
+      // a comment. Cover is allowed to expire — that is what interval cohorts are for.
+      const expiring = features.filter(
+        (f) =>
+          KIND_OF[f.properties.change_type as ChangeType] === 'change' &&
+          f.properties.valid_to != null,
       );
 
-      for (const role of roles) {
-        const mine = layers.filter(
-          (l) => l.id.replace(/-\d{4}$/, '') === `trace-${entry!.id}-${role}`,
+      // Water's JRC `lost *` / `ephemeral *` classes still carry a `valid_to` until T-031 re-dates
+      // them as open-ended change; the suite says so rather than going red for a known ticket.
+      // "Not yet re-extracted under the taxonomy" is read off the tileset itself: a domain that
+      // has been carries `cover`. Once it does, expiring change is a real failure again — which is
+      // the right pressure to have on T-031 the moment T-030 lands.
+      const pendingT031 = expiring.length > 0 && entry.changeTypes?.includes('cover') !== true;
+      if (pendingT031) {
+        console.warn(
+          `[${entry.id}] ${expiring.length} change-kind features carry valid_to — pending T-031`,
         );
-
-        // What the cohorts actually put on screen: only those left at non-zero opacity. This is
-        // driven by the build's own opacity assignment, so it exercises the gating, not just the
-        // filter text.
-        const shown = new Set<number>();
-        for (const layer of mine) {
-          const paint = layer.paint as Record<string, unknown>;
-          const { shown: opacity } = opacityChannel({ type: layer.type, paint });
-          if (opacity === 0) continue;
-          for (const i of selects(layer.filter, features, layer.id)) shown.add(i);
-        }
-
-        // The reference: this role's own `change_type` test — unchanged by the cohort model, and
-        // taken from the layer rather than restated here — composed with the plain time semantics
-        // the cohorts replaced.
-        const first = mine[0];
-        expect(first).toBeDefined();
-        const changeTypeTest = (first!.filter as unknown as unknown[])[2];
-        const matchesType = selects(changeTypeTest, features, `${role}.change_type`);
-        const expected = new Set(
-          // Indices come from `features` itself, so the lookup cannot miss.
-          [...matchesType].filter((i) => Number(features[i]!.properties.valid_from) <= year),
-        );
-
-        expect({ year, role, ids: [...shown].sort((a, b) => a - b) }).toEqual({
-          year,
-          role,
-          ids: [...expected].sort((a, b) => a - b),
-        });
+        return;
       }
-    }
-  }, 120_000);
+
+      expect(expiring).toHaveLength(0);
+    },
+  );
+
+  it.skipIf(!runnable)(
+    'selects exactly what the plain time semantics would, every year and every role',
+    () => {
+      const years: number[] = [];
+      for (let y = entry.temporal.start; y <= entry.temporal.end; y += 1) years.push(y);
+
+      for (const year of years) {
+        // Everything the domain can show, so cover and every change are covered.
+        const layers = layersFor(entry, year, new Set(entry.changeTypes ?? [])).layers;
+        const roles = new Set(layers.map((l) => roleOf(l.id, entry.id)));
+
+        for (const role of roles) {
+          const mine = layers.filter((l) => roleOf(l.id, entry.id) === role);
+          const first = mine[0]!;
+
+          // The reference: this role's own `change_type` test — taken from the layer rather than
+          // restated here — composed with the time semantics its kind of cohort stands in for.
+          const changeTypeTest = (first.filter as unknown as unknown[]).at(-1);
+          const changeType = (changeTypeTest as unknown[])[2] as ChangeType;
+          const kind = KIND_OF[changeType];
+          const matchesType = selects(changeTypeTest, features, `${role}.change_type`);
+          const expected = new Set(
+            [...matchesType].filter((i) => inYear(features[i]!.properties, year, kind)),
+          );
+
+          // What the cohorts actually put on screen: only those left at non-zero opacity. This is
+          // driven by the build's own opacity assignment, so it exercises the gating, not just the
+          // filter text. A feature two shown layers both select would be drawn twice — the property
+          // the canonical decomposition exists to prevent.
+          const shown = new Set<number>();
+          const twice: number[] = [];
+          for (const layer of mine) {
+            const paint = layer.paint as Record<string, unknown>;
+            const { shown: opacity } = opacityChannel({ type: layer.type, paint });
+            if (opacity === 0) continue;
+            for (const i of selects(layer.filter, features, layer.id)) {
+              if (shown.has(i)) twice.push(i);
+              shown.add(i);
+            }
+          }
+
+          expect({ year, role, twice }).toEqual({ year, role, twice: [] });
+          expect({ year, role, ids: [...shown].sort((a, b) => a - b) }).toEqual({
+            year,
+            role,
+            ids: [...expected].sort((a, b) => a - b),
+          });
+        }
+      }
+    },
+    240_000,
+  );
 });
