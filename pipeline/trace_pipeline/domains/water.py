@@ -690,10 +690,15 @@ class WaterDomain(Domain):
             "Regions where the source's two products disagree are left out on top of that: where "
             "the transition band calls a region arriving or ended but the yearly record never sees "
             "water there, or saw it there in the record's final year, no year can be dated, and "
-            "the region is dropped rather than given a guessed one, about "
-            f"{config.WATER_UNDATABLE_DROPPED_PCT:.2f}% of the change area that passes the sieve. "
-            "Gain means a body holds water more of the time than the early record shows, not that "
-            "water appeared where there was none: satellite revisit roughly doubled over the "
+            "the region is dropped rather than given a guessed one"
+            + (
+                f", about {config.WATER_UNDATABLE_DROPPED_PCT:.2f}% of the change area that "
+                "passes the sieve. "
+                if config.WATER_UNDATABLE_DROPPED_PCT > 0
+                else "; the current extraction dropped none. "
+            )
+            + "Gain means a body holds water more of the time than the early record shows, not "
+            "that water appeared where there was none: satellite revisit roughly doubled over the "
             "period, so a body that was always seasonally wet is caught more often later and can "
             "read as gain on that alone. "
             "Dates are weaker than the classes. Landsat barely covered Taiwan early on — the "

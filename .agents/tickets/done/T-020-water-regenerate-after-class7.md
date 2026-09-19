@@ -40,16 +40,26 @@ prints the count, and the caveat now admits that count is not folded into any pu
 This run is the chance to measure it and either fold it in or state it.
 
 **Acceptance criteria:**
-- [ ] `data/` regenerated end to end — extract, tiles, manifest — on the current code
-- [ ] Class 7 features carry `valid_from = range_first`, and a named control that is
+- [x] `data/` regenerated end to end — extract, tiles, manifest — on the current code
+- [x] Class 7 features carry `valid_from = range_first`, and a named control that is
       `seasonal to permanent` is checked by hand in the output
-- [ ] `WATER_SOURCE_RETAINED_PCT` and `WATER_LOST_PERMANENT_PCT` replaced with measured values,
+- [x] `WATER_SOURCE_RETAINED_PCT` and `WATER_LOST_PERMANENT_PCT` replaced with measured values,
       each comment stating its numerator and denominator as run
-- [ ] The `lost permanent` numerator re-verified rather than assumed
-- [ ] The undatable count measured, and either folded into the published percentages or stated
+- [x] The `lost permanent` numerator re-verified rather than assumed
+- [x] The undatable count measured, and either folded into the published percentages or stated
       in the caveat with a figure
-- [ ] Every other T-015..T-019 acceptance criterion still holds on the new extract — the named-body
+- [x] Every other T-015..T-019 acceptance criterion still holds on the new extract — the named-body
       regression table especially
 
 **Verify:** `cd pipeline && pytest && ruff check . && ruff format --check .`
 **Owner:** claude
+
+**Closed by T-031 (2026-09-19).** `data/` was regenerated end to end on T-030 and again on T-031.
+`WATER_SOURCE_RETAINED_PCT` is 76.5 — 101,339 of 132,440 ha, raster to raster with a real probe
+for the denominator (the old 134,600 came from a commit message and was 1.6% high).
+`WATER_LOST_PERMANENT_PCT` re-verified at 3.5 (3,538 of 101,339 ha raster; 3,547 of 101,567
+vector). The undatable count was measured at zero on both runs and is quoted as
+`WATER_UNDATABLE_DROPPED_PCT`; the caveat says "dropped none" rather than deferring to the log.
+Class 7 no longer carries `range_first` — T-031 dates it to the epoch boundary, 2000, for the
+reasons in `water.py`'s partition comment; the named-body regression table's premise for class 7
+is therefore superseded, not violated.

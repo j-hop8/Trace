@@ -538,11 +538,16 @@ def test_caveat_says_change_accumulates_and_when_loss_is_dated(monkeypatch):
 
 
 def test_caveat_quotes_the_undatable_share_rather_than_deferring_it(monkeypatch):
+    """Either the measured share or, when the run dropped nothing, that it dropped nothing -- never
+    the old deferral to the run log. Both branches are checked by flipping the constant."""
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
-    caveat = water.WaterDomain().caveat
+    assert "not yet folded" not in water.WaterDomain().caveat
 
-    assert f"{config.WATER_UNDATABLE_DROPPED_PCT:.2f}%" in caveat
-    assert "not yet folded" not in caveat
+    monkeypatch.setattr(config, "WATER_UNDATABLE_DROPPED_PCT", 0.0)
+    assert "dropped none" in water.WaterDomain().caveat
+
+    monkeypatch.setattr(config, "WATER_UNDATABLE_DROPPED_PCT", 1.25)
+    assert "about 1.25% of the change area" in water.WaterDomain().caveat
 
 
 def test_caveat_names_small_ponds_by_their_local_name(monkeypatch):
