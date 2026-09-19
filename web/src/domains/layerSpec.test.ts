@@ -54,14 +54,14 @@ const entry: DomainManifestEntry = {
 };
 
 /**
- * A water-shaped entry, for the half of the model the forest fixture cannot reach: a domain with no
- * cover and three change types, where the roles built are an entirely different set.
+ * A water-shaped entry, for the half of the model the forest fixture cannot reach: three change
+ * types alongside cover, where the roles built are a different set.
  */
 const water: DomainManifestEntry = {
   id: 'water',
   label: { en: 'Water', zh: '水體' },
   hue: '#2563eb',
-  changeTypes: ['gain', 'loss', 'stable'],
+  changeTypes: ['cover', 'gain', 'loss', 'stable'],
   temporal: { start: 1984, end: 2021 },
   source: {
     name: 'JRC Global Surface Water',
@@ -73,6 +73,9 @@ const water: DomainManifestEntry = {
   caveat: 'Surface water at 30 m resolution.',
   tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayer: 'water' },
 };
+
+/** A domain with change and no cover at all — the case the cover machinery must stay out of. */
+const changeOnly: DomainManifestEntry = { ...water, changeTypes: ['gain', 'loss', 'stable'] };
 
 /** Everything the domain can show — the default the app opens in. */
 const all = (e: DomainManifestEntry) => new Set(e.changeTypes ?? []);
@@ -378,11 +381,13 @@ describe('roles are derived from what the tileset holds', () => {
     // The table used to be fixed at seven roles, so water built cover cohorts for a baseline it
     // does not have: layers that could never match a feature and were switched between as if
     // they might.
-    expect(rolesOf(water).some((role) => role.startsWith('cover-'))).toBe(false);
+    expect(rolesOf(changeOnly).some((role) => role.startsWith('cover-'))).toBe(false);
   });
 
   it('gives every state a fill and an outline, and a pattern only where the style has one', () => {
     expect(rolesOf(water)).toEqual([
+      'cover-fill',
+      'cover-outline',
       'fill-stable',
       'outline-stable',
       'fill-gain',
@@ -412,9 +417,9 @@ describe('roles are derived from what the tileset holds', () => {
       const isCover = roleOf(id).startsWith('cover-');
       expect({ id, interval: /-\d{4}-\d{4}$/.test(id) }).toEqual({ id, interval: isCover });
     }
-    expect(layerIdsFor(water).every((id) => /-\d{4}$/.test(id) && !/-\d{4}-\d{4}$/.test(id))).toBe(
-      true,
-    );
+    expect(
+      layerIdsFor(changeOnly).every((id) => /-\d{4}$/.test(id) && !/-\d{4}-\d{4}$/.test(id)),
+    ).toBe(true);
   });
 
   it('builds nothing for a manifest that never said what it holds', () => {

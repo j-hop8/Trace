@@ -1,26 +1,73 @@
 import { styleFor } from '@/domains/colors';
 import type { FeatureStyle } from '@/domains/colors';
-import { coversYear, selectableTypes } from '@/domains/manifest';
+import { coversYear, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
+import type { DomainManifestEntry } from '@/domains/manifest';
 import { useTraceStore } from '@/store/useTraceStore';
-import type { ChangeType } from '@/types/feature';
+import type { ChangeType, Kind } from '@/types/feature';
+
+/**
+ * The two kinds of state, and what each one is compared against.
+ *
+ * This is the line the control was missing. A chip's colour says *which* state; nothing said what
+ * that state was measured against — and cover and change have different answers. Cover is what
+ * was there in the drawn year. Change is everything that has happened since the record began, so
+ * a loss chip at 2010 is every loss from the first year to 2010, not 2010's alone. The heading
+ * states the baseline in words, on screen, because on a phone there is no hover and in a
+ * screenshot there is no tooltip.
+ *
+ * Both glosses are functions of the manifest entry and the drawn year. No domain, no year and no
+ * range is named here.
+ */
+const KIND_LABELS: Record<
+  Kind,
+  {
+    zh: string;
+    en: string;
+    gloss: (ctx: { year: number; start: number; inRange: boolean }) => { zh: string; en: string };
+  }
+> = {
+  cover: {
+    zh: '範圍',
+    en: 'cover',
+    gloss: ({ year, inRange }) =>
+      // Outside the record there is nothing to draw and the year must not be named as if there
+      // were — the cover layers are off, and the pill already carries the "no data" badge.
+      inRange
+        ? { zh: `${year}年的範圍`, en: `what was there in ${year}` }
+        : { zh: '此年無紀錄', en: 'no record for this year' },
+  },
+  change: {
+    zh: '變化',
+    en: 'change',
+    gloss: ({ start }) => ({ zh: `自${start}年起累計`, en: `cumulative since ${start}` }),
+  },
+};
 
 /**
  * The states, labelled generically.
  *
- * No label names a subject: "覆蓋" is whatever the domain's cover is, so the same control reads
- * correctly for forest cover and for water surface without a per-domain string table — which would
+ * No label names a subject: "範圍" is whatever the domain's cover is, so the same control reads
+ * correctly for forest canopy and for water surface without a per-domain string table — which would
  * put domain literals back into a component, and would also invite a *wrong* label. Water's
  * `stable` covers permanent and seasonal water both; calling it "permanent" because that is the
  * commonest class would quietly misdescribe a third of the layer.
  */
-const TYPE_LABELS: Record<ChangeType, { zh: string; gloss: string }> = {
-  cover: {
-    zh: '覆蓋',
-    gloss: 'the baseline, with everything lost by the selected year taken out',
+const TYPE_LABELS: Record<
+  ChangeType,
+  { zh: string; en: string; gloss: { zh: string; en: string } }
+> = {
+  cover: { zh: '範圍', en: 'cover', gloss: { zh: '該年存在的範圍', en: 'what existed that year' } },
+  stable: {
+    zh: '穩定',
+    en: 'stable',
+    gloss: { zh: '整段紀錄都在', en: 'there throughout the record' },
   },
-  stable: { zh: '穩定', gloss: 'present throughout the record' },
-  gain: { zh: '增加', gloss: 'appeared during the record' },
-  loss: { zh: '減少', gloss: 'gone by the selected year' },
+  gain: { zh: '增加', en: 'gain', gloss: { zh: '紀錄期間出現', en: 'appeared during the record' } },
+  loss: {
+    zh: '減少',
+    en: 'loss',
+    gloss: { zh: '紀錄期間消失或減少', en: 'gone or reduced during the record' },
+  },
 };
 
 /**
@@ -59,9 +106,94 @@ function Swatch({ style: featureStyle }: { style: FeatureStyle }) {
 }
 
 /**
+ * One kind's row: a heading that states the baseline, then a chip per state of that kind.
+ *
+ * Drawn only when the tileset holds a state of this kind — a domain with no cover gets no cover
+ * row rather than an empty heading. The heading is a button: pressing it is every chip in the row
+ * at once, so a reader can drop all of "change" and keep "cover" in one press.
+ */
+function KindGroup({
+  domain,
+  kind,
+  year,
+  selected,
+  onToggleType,
+  onToggleKind,
+}: {
+  domain: DomainManifestEntry;
+  kind: Kind;
+  year: number;
+  selected: ReadonlySet<ChangeType>;
+  onToggleType: (changeType: ChangeType) => void;
+  onToggleKind: () => void;
+}) {
+  const types = selectableTypesByKind(domain)[kind];
+  if (types.length === 0) return null;
+
+  const label = KIND_LABELS[kind];
+  const gloss = label.gloss({
+    year,
+    start: domain.temporal.start,
+    inRange: coversYear(domain, year),
+  });
+  const allOn = types.every((changeType) => selected.has(changeType));
+
+  return (
+    <div role="group" aria-label={`${domain.label.zh} ${label.zh}`} className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={onToggleKind}
+        aria-pressed={allOn}
+        title={`${domain.label.zh}：${label.zh} — ${gloss.en}`}
+        className="flex items-baseline gap-1.5 self-start text-[10px] leading-tight text-slate-500 transition hover:text-slate-300"
+      >
+        <span className={allOn ? 'text-slate-400' : ''}>{label.zh}</span>
+        <span aria-hidden>·</span>
+        {/* The baseline, in words, on screen. This is the line that says what the colours mean. */}
+        <span>{gloss.zh}</span>
+      </button>
+
+      <div className="flex flex-wrap gap-1">
+        {types.map((changeType) => {
+          const on = selected.has(changeType);
+          const type = TYPE_LABELS[changeType];
+
+          return (
+            <button
+              key={changeType}
+              type="button"
+              onClick={() => onToggleType(changeType)}
+              aria-pressed={on}
+              title={`${domain.label.zh}：${label.zh}・${type.zh} — ${gloss.en}; ${type.gloss.en}`}
+              className={[
+                'flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] transition',
+                on
+                  ? 'border-ink-700 bg-ink-900/85 text-slate-200'
+                  : 'border-ink-800 bg-ink-950/70 text-slate-500 hover:text-slate-300',
+              ].join(' ')}
+            >
+              {/*
+                The swatch keeps its colours when switched off, at reduced opacity rather than
+                greyed out. Greying would take the hue away, and the hue is the only thing saying
+                which domain this chip belongs to once several are open.
+              */}
+              <span className={on ? '' : 'opacity-40'}>
+                <Swatch style={styleFor(domain.hue, changeType)} />
+              </span>
+              <span>{type.zh}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Layer switches, built by iterating the manifest — no domain is named here.
  *
- * Two levels, both driven by the manifest: a domain on or off, and which of its states are drawn.
+ * Three levels, all driven by the manifest: a domain on or off; its two kinds of state, each with
+ * the baseline it is compared against stated on screen; and which states within a kind are drawn.
  * The states come from `selectableTypes`, so a domain offers exactly the switches its tileset can
  * fill, and they are independent rather than one-of — the previous control could show forest's
  * canopy or its losses but never both.
@@ -83,6 +215,7 @@ export default function LayerToggles() {
   // would not re-render this list when the selection changed.
   const selectedTypes = useTraceStore((s) => s.selectedTypes);
   const toggleChangeType = useTraceStore((s) => s.toggleChangeType);
+  const toggleKind = useTraceStore((s) => s.toggleKind);
 
   if (!manifest) return null;
 
@@ -148,38 +281,19 @@ export default function LayerToggles() {
               <div
                 role="group"
                 aria-label={`${domain.label.zh} 圖層`}
-                className="flex flex-wrap gap-1 pl-3"
+                className="flex flex-col gap-1.5 pl-3"
               >
-                {types.map((changeType) => {
-                  const on = selected.has(changeType);
-                  const label = TYPE_LABELS[changeType];
-
-                  return (
-                    <button
-                      key={changeType}
-                      type="button"
-                      onClick={() => toggleChangeType(domain.id, changeType)}
-                      aria-pressed={on}
-                      title={`${domain.label.zh}：${label.zh} — ${label.gloss}`}
-                      className={[
-                        'flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] transition',
-                        on
-                          ? 'border-ink-700 bg-ink-900/85 text-slate-200'
-                          : 'border-ink-800 bg-ink-950/70 text-slate-500 hover:text-slate-300',
-                      ].join(' ')}
-                    >
-                      {/*
-                        The swatch keeps its colours when switched off, at reduced opacity rather
-                        than greyed out. Greying would take the hue away, and the hue is the only
-                        thing saying which domain this chip belongs to once several are open.
-                      */}
-                      <span className={on ? '' : 'opacity-40'}>
-                        <Swatch style={styleFor(domain.hue, changeType)} />
-                      </span>
-                      <span>{label.zh}</span>
-                    </button>
-                  );
-                })}
+                {(Object.keys(KIND_LABELS) as Kind[]).map((kind) => (
+                  <KindGroup
+                    key={kind}
+                    domain={domain}
+                    kind={kind}
+                    year={year}
+                    selected={selected}
+                    onToggleType={(changeType) => toggleChangeType(domain.id, changeType)}
+                    onToggleKind={() => toggleKind(domain.id, kind)}
+                  />
+                ))}
               </div>
             )}
           </li>

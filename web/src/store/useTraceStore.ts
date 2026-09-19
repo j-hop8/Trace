@@ -6,8 +6,8 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
 
-import type { ChangeType, DomainId, TraceFeatureProperties } from '@/types/feature';
-import { combinedRange, selectableTypes } from '@/domains/manifest';
+import type { ChangeType, DomainId, Kind, TraceFeatureProperties } from '@/types/feature';
+import { combinedRange, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
 import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
 
 export interface SelectedFeature {
@@ -72,6 +72,12 @@ interface TraceState {
   setManifestError: (message: string) => void;
   toggleDomain: (id: DomainId) => void;
   toggleChangeType: (id: DomainId, changeType: ChangeType) => void;
+  /**
+   * Every state of one kind at once — the group heading's press. All on → all off; anything
+   * else → all on. The same consequences as `toggleChangeType`, because it is the same event
+   * applied to several chips.
+   */
+  toggleKind: (id: DomainId, kind: Kind) => void;
   selectedTypesFor: (id: DomainId) => Set<ChangeType>;
   setLoadingDomains: (ids: Set<DomainId>) => void;
   setYear: (year: number) => void;
@@ -97,6 +103,42 @@ function clampYear(
   const range = combinedRange(active);
   if (!range) return year;
   return Math.min(Math.max(year, range.start), range.end);
+}
+
+/**
+ * The state after one domain's selected states change, however they changed.
+ *
+ * Un-checking the last state switches the domain off outright. The alternative is a lit toggle
+ * over an empty map, which is indistinguishable from a layer that simply has no data for the year
+ * — the exact confusion the "no data" badge exists to prevent. Making the state unreachable is
+ * cheaper than inventing a third thing for the badge to say.
+ *
+ * And switching off the last state is the same event as `toggleDomain` switching the domain off,
+ * so it has the same three consequences: a domain that is gone is not loading, an orphaned
+ * readout has to go, and the slider's bounds have changed under the year.
+ */
+function withSelectedTypes(
+  state: TraceState,
+  id: DomainId,
+  nextTypes: Set<ChangeType>,
+): Partial<TraceState> {
+  const activeDomains = new Set(state.activeDomains);
+  if (nextTypes.size === 0) activeDomains.delete(id);
+
+  const keepSelection =
+    state.selected !== null &&
+    (state.selected.properties.domain !== id ||
+      nextTypes.has(state.selected.properties.change_type));
+
+  return {
+    selectedTypes: new Map(state.selectedTypes).set(id, nextTypes),
+    activeDomains,
+    loadingDomains: new Set(
+      [...state.loadingDomains].filter((domain) => activeDomains.has(domain)),
+    ),
+    selected: keepSelection ? state.selected : null,
+    year: clampYear(state.year, state.manifest, activeDomains),
+  };
 }
 
 export const useTraceStore = create<TraceState>((set, get) => ({
@@ -191,35 +233,27 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       const entry = state.manifest?.domains.find((domain) => domain.id === id);
       if (!entry) return {};
 
-      const current = state.selectedTypes.get(id) ?? new Set(selectableTypes(entry));
-      const nextTypes = new Set(current);
+      const nextTypes = new Set(state.selectedTypes.get(id) ?? selectableTypes(entry));
       if (nextTypes.has(changeType)) nextTypes.delete(changeType);
       else nextTypes.add(changeType);
 
-      // Un-checking the last state switches the domain off outright. The alternative is a lit
-      // toggle over an empty map, which is indistinguishable from a layer that simply has no data
-      // for the year — the exact confusion the "no data" badge exists to prevent. Making the state
-      // unreachable is cheaper than inventing a third thing for the badge to say.
-      const activeDomains = new Set(state.activeDomains);
-      if (nextTypes.size === 0) activeDomains.delete(id);
+      return withSelectedTypes(state, id, nextTypes);
+    }),
 
-      const keepSelection =
-        state.selected !== null &&
-        (state.selected.properties.domain !== id ||
-          nextTypes.has(state.selected.properties.change_type));
+  toggleKind: (id, kind) =>
+    set((state) => {
+      const entry = state.manifest?.domains.find((domain) => domain.id === id);
+      if (!entry) return {};
 
-      return {
-        selectedTypes: new Map(state.selectedTypes).set(id, nextTypes),
-        activeDomains,
-        // Same three consequences as `toggleDomain`, because switching off the last state is the
-        // same event: a domain that is gone is not loading, an orphaned readout has to go, and the
-        // slider's bounds have changed under the year.
-        loadingDomains: new Set(
-          [...state.loadingDomains].filter((domain) => activeDomains.has(domain)),
-        ),
-        selected: keepSelection ? state.selected : null,
-        year: clampYear(state.year, state.manifest, activeDomains),
-      };
+      const group = selectableTypesByKind(entry)[kind];
+      const nextTypes = new Set(state.selectedTypes.get(id) ?? selectableTypes(entry));
+      const allOn = group.every((changeType) => nextTypes.has(changeType));
+      for (const changeType of group) {
+        if (allOn) nextTypes.delete(changeType);
+        else nextTypes.add(changeType);
+      }
+
+      return withSelectedTypes(state, id, nextTypes);
     }),
 
   selectedTypesFor: (id) => get().selectedTypes.get(id) ?? new Set(),

@@ -80,7 +80,10 @@ features do not yet satisfy this (see the cohort note above); T-031 re-dates the
 ### Colour is a pure function, and hue means the domain
 
 `web/src/domains/colors.ts` exports one function, `styleFor(hue, changeType)`, returning
-`{ color, mark, stroke, pattern }`.
+`{ color, mark, stroke, pattern }`. Colour is keyed by the state; the *kind* of state (cover or
+change, `KIND_OF` in [feature.ts](web/src/types/feature.ts)) keys everything else — which cohort
+model draws it, which toggle group it sits in, and which baseline that group states on screen: the
+drawn year for cover, the record's first year for change.
 
 **Every state is a transform of the domain's own hue — there is no cross-domain change colour.**
 Cover is the hue itself; `stable` is pulled toward the basemap's grey so it recedes; `gain` is

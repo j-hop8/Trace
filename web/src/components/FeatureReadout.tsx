@@ -1,5 +1,5 @@
 import { useTraceStore } from '@/store/useTraceStore';
-import { readMetric } from '@/types/feature';
+import { KIND_OF, readMetric } from '@/types/feature';
 import type { TraceFeatureProperties } from '@/types/feature';
 
 /**
@@ -20,37 +20,42 @@ function formatArea(hectares: number | undefined): string | null {
 /**
  * Whether this feature's `area_ha` describes a real thing, or an artefact of how it was cut.
  *
- * Cover blocks are vectorised over a spatial grid (see `EXTENT_GRID` in the forest pipeline), so
- * a block straddling a cell edge comes back as two features and its area is the piece inside that
- * cell. The number is a true geodesic area of the polygon, but the polygon's boundary is partly an
+ * Cover shapes are vectorised over a spatial grid (`COVER_GRID` / `WATER_GRID` in the pipeline)
+ * and, for water, split again at every year boundary, so a body straddling a cell edge or a dry
+ * year comes back as several features and each one's area is the piece inside that cut. The
+ * number is a true geodesic area of the polygon, but the polygon's boundary is partly an
  * extraction detail — quoting it as "this forest: 198,830 ha" states a fact about the chunking as
- * though it were a fact about the forest. Loss patches have no such problem: their boundaries are
- * the boundaries of the thing that was lost.
+ * though it were a fact about the forest. A change feature is the thing that changed, and its
+ * area is that thing's.
  */
 function areaIsMeaningful(props: TraceFeatureProperties): boolean {
-  return props.change_type !== 'cover';
+  return KIND_OF[props.change_type] === 'change';
 }
 
-/** The one-line story: what this is, when it changed, and by how much. */
+/**
+ * The one-line story: what this is, when, and by how much.
+ *
+ * Two kinds, two tenses. A cover feature carries its own validity, half-open, so it is described
+ * by the years it was there and — if it ended — the year it was gone. A change feature is a
+ * verdict that applies from its year and for every year after, so it is described by that one
+ * year; it never has an end to describe.
+ */
 function sentence(props: TraceFeatureProperties, area: string | null): string {
   const from = props.valid_from;
   const to = props.valid_to;
 
   const when =
-    props.change_type === 'loss'
-      ? to
-        ? `lost between ${from} and ${to}`
-        : `lost in ${from}`
-      : props.change_type === 'gain'
-        ? `appeared in ${from}`
-        : // Cover is an observation of one year, not a claim about every year since. "Present
-          // since 2000" would say this block is still standing, which is exactly what the loss
-          // features exist to contradict.
-          props.change_type === 'cover'
-          ? `mapped at the ${from} baseline`
-          : to
-            ? `present ${from}–${to}`
-            : `present since ${from}`;
+    props.change_type === 'cover'
+      ? to == null
+        ? `there from ${from} to the end of the record`
+        : to - from === 1
+          ? `there in ${from}, gone by ${to}`
+          : `there ${from}–${to - 1}, gone by ${to}`
+      : props.change_type === 'loss'
+        ? `lost in ${from}`
+        : props.change_type === 'gain'
+          ? `appeared in ${from}`
+          : `there throughout, from ${from}`;
 
   const subject = props.subtype ?? props.domain;
   const quotable = area && areaIsMeaningful(props) ? area : null;
@@ -86,8 +91,8 @@ export default function FeatureReadout() {
           load, and the reader has no way to tell that from a number deliberately withheld. */}
       {area && !areaIsMeaningful(props) && (
         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-          No area given: baseline blocks are cut by the extraction grid, so one block&rsquo;s size
-          is partly an artefact of where that grid fell.
+          No area given: cover shapes are cut by the extraction grid and at year boundaries, so one
+          shape&rsquo;s size is partly an artefact of where those cuts fell.
         </p>
       )}
 
