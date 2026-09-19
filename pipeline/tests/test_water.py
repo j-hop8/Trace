@@ -6,6 +6,7 @@ either any better than a unit test would. `gsw_v15_reachable` is monkeypatched w
 matters, so these never need real network access or credentials.
 """
 
+import json
 import pathlib
 import re
 
@@ -563,7 +564,7 @@ def test_caveat_names_small_ponds_by_their_local_name(monkeypatch):
 def test_manifest_entry_is_well_formed(monkeypatch):
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
     entry = water.WaterDomain().manifest_entry(
-        "pmtiles:///data/water.pmtiles", ("loss", "gain", "stable")
+        "pmtiles:///data/water.pmtiles", ("cover", "loss", "gain", "stable")
     )
 
     assert entry["id"] == "water"
@@ -617,3 +618,143 @@ def test_caveat_says_what_loss_bundles(monkeypatch):
 
     assert "ephemeral" in caveat
     assert f"{config.WATER_LOST_PERMANENT_PCT:.1f}%" in caveat
+
+
+# --- cover: runs of water years -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "from_offset,to_offset,label",
+    [(0, None, 99), (0, 1, 1), (3, None, 399), (10, 20, 1020), (37, 38, 3738), (40, None, 4099)],
+)
+def test_run_label_round_trips(from_offset, to_offset, label):
+    """The label is what `reduceToVectors` segments on; a bad encoding would merge or split runs."""
+    assert water.encode_run(from_offset, to_offset) == label
+    assert water.decode_run(label, 1984) == (
+        1984 + from_offset,
+        None if to_offset is None else 1984 + to_offset,
+    )
+
+
+def test_run_label_refuses_an_empty_or_reversed_run():
+    with pytest.raises(ValueError, match="after"):
+        water.encode_run(5, 5)
+    with pytest.raises(ValueError, match="after"):
+        water.encode_run(5, 4)
+    with pytest.raises(ValueError, match="at or before"):
+        water.decode_run(505, 1984)
+
+
+def test_run_label_cannot_reach_the_open_sentinel_by_accident():
+    """An end offset of 99 would decode as open; the record cannot be that long, and the encoder
+    refuses it rather than trusting that."""
+    with pytest.raises(ValueError):
+        water.encode_run(0, water.RUN_OPEN)
+    with pytest.raises(ValueError):
+        water.encode_run(water.RUN_OPEN, None)
+
+
+def test_a_blind_year_does_not_split_a_run():
+    """Taiwan is 100% blind in 1985. Left as dry, every pre-record body would end in 1984 and
+    begin again in 1986."""
+    assert water.impute_nearest([True, None, True]) == [True, True, True]
+    assert water.runs_of(water.impute_nearest([True, None, True])) == [(0, None)]
+
+
+def test_leading_blind_years_take_the_first_observation():
+    """Water first seen in 1988 with 1984-87 blind is water from 1984 -- the same rule
+    `PRESENT_AT_START` applies to change: the record starts with the water already there."""
+    assert water.impute_nearest([None, None, None, None, True, True]) == [True] * 6
+
+
+def test_trailing_and_inner_blind_years_carry_the_last_observation():
+    """Prefer-prior: a blind year between wet and dry is wet, because that is what was last seen.
+    It is one pass forward and one back, and a reader can predict it."""
+    assert water.impute_nearest([True, None, False]) == [True, True, False]
+    assert water.impute_nearest([False, True, None, None]) == [False, True, True, True]
+
+
+def test_never_observed_is_not_water():
+    assert water.impute_nearest([None, None, None]) == [False, False, False]
+    assert water.runs_of([False, False, False]) == []
+
+
+def test_runs_are_half_open_and_never_empty():
+    assert water.runs_of([True, True, False, True]) == [(0, 2), (3, None)]
+    assert water.runs_of([False, True, False]) == [(1, 2)]
+    assert water.runs_of([True]) == [(0, None)]
+    for states in ([True, False, True, False, True], [False] * 4 + [True] * 3):
+        for start, end in water.runs_of(states):
+            assert end is None or end > start
+
+
+def test_a_pixel_cannot_start_runs_in_consecutive_years():
+    """What lets two start years share one band in `cover_run_labels`: a run lasts at least a year
+    and a dry year has to follow it, so starts are at least two years apart."""
+    import itertools
+
+    for states in itertools.product([True, False], repeat=8):
+        starts = [s for s, _ in water.runs_of(list(states))]
+        assert all(b - a >= 2 for a, b in zip(starts, starts[1:], strict=False)), states
+
+
+def test_cover_feature_satisfies_the_contract_and_carries_no_subtype():
+    feature = water.build_cover_feature(
+        SQUARE,
+        run_label=water.encode_run(4, 12),
+        range_first=1984,
+        area_ha=0.5,
+        gsw_asset=config.GSW_V14_YEARLY,
+    )
+    schema.validate(schema.feature_collection([feature]))
+    props = feature["properties"]
+
+    assert props["change_type"] == "cover"
+    assert props["valid_from"] == 1988
+    assert props["valid_to"] == 1996
+    assert props["method"] == water.COVER_METHOD
+    assert props["source"] == config.GSW_V14_YEARLY
+    assert "subtype" not in props
+
+
+def test_open_cover_feature_has_no_end():
+    feature = water.build_cover_feature(
+        SQUARE,
+        run_label=water.encode_run(0, None),
+        range_first=1984,
+        area_ha=0.5,
+        gsw_asset=config.GSW_V14_YEARLY,
+    )
+    assert feature["properties"]["valid_from"] == 1984
+    assert feature["properties"]["valid_to"] is None
+
+
+def test_water_declares_cover_among_its_change_types():
+    assert "cover" in water.WaterDomain.change_types
+
+
+def test_caveat_says_cover_is_a_stretch_of_years_and_how_much_is_imputed(monkeypatch):
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    caveat = water.WaterDomain().caveat
+
+    assert "stretch of years" in caveat
+    assert "drawn only for those years" in caveat
+    assert f"{config.WATER_COVER_IMPUTED_PCT:.0f}%" in caveat
+    assert f"{config.WATER_COVER_RETAINED_PCT:.0f}%" in caveat
+    assert "two JRC products" in caveat
+
+
+_SHIPPED = pathlib.Path(__file__).resolve().parents[2] / "data" / "water.geojson"
+
+
+@pytest.mark.skipif(not _SHIPPED.exists(), reason="no shipped water.geojson (data/ is generated)")
+def test_shipped_cover_runs_are_well_formed():
+    """The builder refuses a bad run; this checks the file that actually shipped agrees."""
+    features = json.loads(_SHIPPED.read_text(encoding="utf-8"))["features"]
+    cover = [f["properties"] for f in features if f["properties"]["change_type"] == "cover"]
+
+    assert cover, "shipped water.geojson carries no cover features"
+    assert all("subtype" not in p for p in cover)
+    assert all(p["valid_from"] >= config.GSW_FIRST_YEAR for p in cover)
+    bad = [p for p in cover if p["valid_to"] is not None and p["valid_to"] <= p["valid_from"]]
+    assert not bad, f"{len(bad)} cover runs end at or before they begin"
