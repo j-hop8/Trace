@@ -82,17 +82,17 @@ Deferred from T-028 because the water extractor violated both; after this ticket
   dissolved: frame one shows no loss that has not happened).
 
 **Acceptance criteria:**
-- [ ] No water change feature carries a non-null `valid_to` (shipped-data test).
-- [ ] `derive_valid_from(6, first_seen=1984, last_seen=2015, range_first=1984) == 2016`;
+- [x] No water change feature carries a non-null `valid_to` (shipped-data test).
+- [x] `derive_valid_from(6, first_seen=1984, last_seen=2015, range_first=1984) == 2016`;
       `(8, …) == GSW_EPOCH_2_FIRST_YEAR`; `(2, first_seen=1988, …) == 1988`; `(1, …) == range_first`.
-- [ ] The four sets partition the roster and are derived from JRC's names by a test.
-- [ ] An `ENDED` region with `last_seen == range_last` is counted undatable, not dated.
-- [ ] `_check_properties` rejects an empty interval and a closed change feature; every fixture
+- [x] The four sets partition the roster and are derived from JRC's names by a test.
+- [x] An `ENDED` region with `last_seen == range_last` is counted undatable, not dated.
+- [x] `_check_properties` rejects an empty interval and a closed change feature; every fixture
       exercises exactly one rule.
-- [ ] `WATER_SOURCE_RETAINED_PCT`, `WATER_LOST_PERMANENT_PCT`, `WATER_UNDATABLE_DROPPED_PCT`
+- [x] `WATER_SOURCE_RETAINED_PCT`, `WATER_LOST_PERMANENT_PCT`, `WATER_UNDATABLE_DROPPED_PCT`
       measured on this run; `WATER_LOSS_DATED_AT_START_PCT` gone.
-- [ ] The web tiles test's change-kind expiry check passes for water; frame 1984 draws no loss.
-- [ ] T-020 and T-025 in `done/` with a closing note.
+- [x] The web tiles test's change-kind expiry check passes for water; frame 1984 draws no loss.
+- [x] T-020 and T-025 in `done/` with a closing note.
 
 **Verify:** `cd pipeline && pytest && ruff check . && ruff format --check . && python -m trace_pipeline.cli extract water && python -m trace_pipeline.cli tiles water`
 **Owner:** claude
