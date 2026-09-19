@@ -94,6 +94,31 @@ def test_an_unknown_class_raises_rather_than_defaulting():
         water.derive_change_type(0)
 
 
+@pytest.mark.parametrize("code", [0, 11, -1, 255])
+def test_the_date_derivations_refuse_an_unknown_class_too(code):
+    """T-022. `derive_valid_to(11, ...)` used to return None -- an unknown class read as water that
+    has not ended -- and `derive_valid_from(11, ...)` returned the measured year. `build_feature`
+    was only saved by its kwargs evaluating `change_type=` after the two dates. The guard is one
+    function all three call first, so kwarg order carries nothing."""
+    with pytest.raises(water.UnknownTransitionClass, match="documented 1-10"):
+        water.derive_valid_from(code, 1990, 1984)
+    with pytest.raises(water.UnknownTransitionClass, match="documented 1-10"):
+        water.derive_valid_to(code, 2015, 2021)
+    with pytest.raises(water.UnknownTransitionClass, match="documented 1-10"):
+        water.require_documented(code)
+
+
+def test_every_documented_class_still_derives_exactly_as_before():
+    """The guard adds a raise on undefined input and changes nothing on defined input."""
+    for code in water.GSW_TRANSITION_CLASSES:
+        water.require_documented(code)
+        assert water.derive_change_type(code) == water.CHANGE_TYPE_BY_TRANSITION[code]
+        expected_from = 1984 if code in water.PRESENT_AT_START else 1990
+        assert water.derive_valid_from(code, 1990, 1984) == expected_from
+        expected_to = 2015 if code in water.ENDED else None
+        assert water.derive_valid_to(code, 2015, 2021) == expected_to
+
+
 # --- valid_from / valid_to derivation ---------------------------------------------------------
 
 

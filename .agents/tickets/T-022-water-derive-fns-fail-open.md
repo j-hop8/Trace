@@ -31,11 +31,11 @@ Behaviour for the ten documented classes must be byte-identical — this adds a 
 is currently undefined, nothing else.
 
 **Acceptance criteria:**
-- [ ] `derive_valid_to` and `derive_valid_from` raise `UnknownTransitionClass` for a code absent
+- [x] `derive_valid_to` and `derive_valid_from` raise `UnknownTransitionClass` for a code absent
       from `GSW_TRANSITION_CLASSES`, with the same message shape `derive_change_type` uses
-- [ ] Tests cover the raise for both, so `build_feature`'s safety no longer rests on kwarg order
-- [ ] All ten documented classes return exactly what they return today
-- [ ] Consider whether the shared guard belongs in one place all three functions call
+- [x] Tests cover the raise for both, so `build_feature`'s safety no longer rests on kwarg order
+- [x] All ten documented classes return exactly what they return today
+- [x] Consider whether the shared guard belongs in one place all three functions call
 
 **Verify:** `cd pipeline && pytest && ruff check . && ruff format --check .`
-**Owner:** claude | codex
+**Owner:** claude
