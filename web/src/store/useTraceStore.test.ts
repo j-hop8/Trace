@@ -213,3 +213,49 @@ describe('selectedTypes', () => {
     expect(useTraceStore.getState().selectedTypes.has('coast')).toBe(false);
   });
 });
+
+/**
+ * `toggleKind` — the group heading's press: every state of one kind at once.
+ */
+describe('toggleKind', () => {
+  beforeEach(() => {
+    useTraceStore.getState().setManifest(manifest);
+  });
+
+  it('switches every state of a kind off when all are on, and back on otherwise', () => {
+    useTraceStore.getState().toggleKind('water', 'change');
+    expect(typesOf('water')).toEqual([]);
+    expect(useTraceStore.getState().activeDomains.has('water')).toBe(false);
+
+    // Bringing the domain back restores everything; then a partial selection flips to all-on.
+    useTraceStore.getState().toggleDomain('water');
+    useTraceStore.getState().toggleChangeType('water', 'gain');
+    expect(typesOf('water')).toEqual(['loss', 'stable']);
+
+    useTraceStore.getState().toggleKind('water', 'change');
+    expect(typesOf('water')).toEqual(['gain', 'loss', 'stable']);
+  });
+
+  it('leaves the other kind untouched', () => {
+    useTraceStore.getState().toggleKind('forest', 'change');
+    expect(typesOf('forest')).toEqual(['cover']);
+    expect(useTraceStore.getState().activeDomains.has('forest')).toBe(true);
+
+    useTraceStore.getState().toggleKind('forest', 'change');
+    expect(typesOf('forest')).toEqual(['cover', 'loss']);
+  });
+
+  it('switches the domain off when the last kind goes, like the last chip does', () => {
+    useTraceStore.getState().toggleKind('forest', 'change');
+    useTraceStore.getState().toggleKind('forest', 'cover');
+    expect(typesOf('forest')).toEqual([]);
+    expect(useTraceStore.getState().activeDomains.has('forest')).toBe(false);
+  });
+
+  it('does nothing for a kind the domain has no states of', () => {
+    // The heading is never drawn for an empty kind, but the action must still be safe.
+    useTraceStore.getState().toggleKind('water', 'cover');
+    expect(typesOf('water')).toEqual(['gain', 'loss', 'stable']);
+    expect(useTraceStore.getState().activeDomains.has('water')).toBe(true);
+  });
+});

@@ -9,8 +9,8 @@
  * file or any component — only a new entry in the JSON.
  */
 
-import { CHANGE_TYPE_ORDER } from '@/types/feature';
-import type { ChangeType, DomainId } from '@/types/feature';
+import { CHANGE_TYPE_ORDER, KIND_OF } from '@/types/feature';
+import type { ChangeType, DomainId, Kind } from '@/types/feature';
 
 export interface DomainSource {
   name: string;
@@ -24,12 +24,12 @@ export interface DomainSource {
 export interface DomainManifestEntry {
   id: DomainId;
   label: { en: string; zh: string };
-  /** Extent hue. The one input to `colorFor` that varies by domain. */
+  /** The domain's hue. The one input to `styleFor` that varies by domain. */
   hue: string;
   /**
    * Which change types this domain's tileset contains.
    *
-   * Measured by the pipeline from the built tiles, not declared — so a domain whose extent pass was
+   * Measured by the pipeline from the built tiles, not declared — so a domain whose cover pass was
    * interrupted advertises what it actually has. This is the whole basis of the layer controls:
    * one toggle per entry here, and one set of map layers per entry here. Testing for a domain id
    * instead would put `forest` back into the components, which is the coupling the manifest exists
@@ -153,4 +153,19 @@ export function coversYear(entry: DomainManifestEntry, year: number): boolean {
 export function selectableTypes(entry: DomainManifestEntry): ChangeType[] {
   const present = new Set(entry.changeTypes ?? []);
   return CHANGE_TYPE_ORDER.filter((changeType) => present.has(changeType));
+}
+
+/**
+ * The same states, split by kind: what was *there* in a year, and what *changed* since the record
+ * began. The toggles group by this, because the two kinds answer different questions and are
+ * compared against different baselines — a year for cover, the record's start for change — and a
+ * chip that does not say which one it is compared against is a colour with no meaning.
+ *
+ * Order within each kind follows `selectableTypes`; a domain without one kind gets an empty list
+ * for it, and the toggles draw no group.
+ */
+export function selectableTypesByKind(entry: DomainManifestEntry): Record<Kind, ChangeType[]> {
+  const byKind: Record<Kind, ChangeType[]> = { cover: [], change: [] };
+  for (const changeType of selectableTypes(entry)) byKind[KIND_OF[changeType]].push(changeType);
+  return byKind;
 }

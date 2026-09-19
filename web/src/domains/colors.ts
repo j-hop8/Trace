@@ -76,7 +76,8 @@ export interface FeatureStyle {
  */
 export function styleFor(hue: string, changeType: ChangeType): FeatureStyle {
   switch (changeType) {
-    // The ground state: the subject at full strength, exactly as the manifest names it.
+    // The cover kind — what was there in the year — at full strength, exactly as the manifest
+    // names it. The change kind's three states are all transforms of this.
     case 'cover': {
       return { color: hue, mark: hue, stroke: mix(hue, INK, 0.25), pattern: null };
     }
