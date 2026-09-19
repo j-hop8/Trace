@@ -111,6 +111,21 @@ def test_retained_percentage_is_plausible_for_the_threshold():
     assert 85 <= config.FOREST_RETAINED_PCT <= 95
 
 
+def test_water_cover_imputed_share_is_material_but_a_minority():
+    """One water-year in six is carried from the nearest observed year. Near zero would mean the
+    blind early record was not being filled; near half would mean the fill is inventing the
+    layer rather than bridging gaps in it."""
+    assert 5 <= config.WATER_COVER_IMPUTED_PCT <= 30
+
+
+def test_water_cover_sieve_keeps_most_water_years_but_less_than_the_change_pass():
+    """Segmenting by run makes every year boundary a region boundary, so this must land below
+    WATER_RETAINED_PCT; a figure at or above it means the two were measured on different things.
+    """
+    assert 60 <= config.WATER_COVER_RETAINED_PCT <= 90
+    assert config.WATER_COVER_RETAINED_PCT < config.WATER_RETAINED_PCT
+
+
 def test_cover_retained_percentage_is_near_total_but_not_over():
     """The baseline is one near-continuous mass; the sieve costs it a fraction of a percent.
 
