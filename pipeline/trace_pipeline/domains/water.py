@@ -365,6 +365,23 @@ def managed_land() -> Any:
     return _managed_land_image
 
 
+def require_documented(transition_code: int) -> None:
+    """Raise `UnknownTransitionClass` unless `transition_code` is one JRC documents.
+
+    The one gate every derivation goes through first. It used to live inside `derive_change_type`
+    alone, and the two date derivations fell through on an unknown code -- `not in ENDED` read as
+    "has not ended", `not in PRESENT_AT_START` as "measure it" -- so an off-roster class came back
+    as open-ended water with a measured onset. `build_feature` was saved only by evaluating
+    `change_type=` after the dates, which is kwarg order, which nothing recorded as load-bearing
+    (T-022). Now the check is the same function in all three places and cannot be reordered away.
+    """
+    if transition_code not in GSW_TRANSITION_CLASSES:
+        raise UnknownTransitionClass(
+            f"transition class {transition_code!r} is not one of JRC's documented 1-10; "
+            f"{config.GSW_MAPPING_LAYERS} may have changed"
+        )
+
+
 def derive_change_type(transition_code: int) -> str:
     """The B4 `change_type` for a patch of JRC transition class `transition_code`.
 
@@ -372,13 +389,8 @@ def derive_change_type(transition_code: int) -> str:
     with proper handling of the years it could not observe. See `CHANGE_TYPE_BY_TRANSITION` for the
     mapping and the module docstring for what deriving it here instead cost.
     """
-    try:
-        return CHANGE_TYPE_BY_TRANSITION[transition_code]
-    except KeyError:
-        raise UnknownTransitionClass(
-            f"transition class {transition_code!r} is not one of JRC's documented 1-10; "
-            f"{config.GSW_MAPPING_LAYERS} may have changed"
-        ) from None
+    require_documented(transition_code)
+    return CHANGE_TYPE_BY_TRANSITION[transition_code]
 
 
 def derive_valid_from(transition_code: int, measured_first_year: int, range_first: int) -> int:
@@ -394,6 +406,7 @@ def derive_valid_from(transition_code: int, measured_first_year: int, range_firs
     definition inside the record; it is floored at `range_first` so a median cannot land the
     feature outside the range the manifest publishes.
     """
+    require_documented(transition_code)
     if transition_code in PRESENT_AT_START:
         return range_first
     return max(measured_first_year, range_first)
@@ -409,6 +422,7 @@ def derive_valid_to(transition_code: int, measured_last_year: int, range_last: i
     Capped at `range_last`: the record ending is not the state ending, so a median that rounds to
     the final year would otherwise assert an end the source never observed.
     """
+    require_documented(transition_code)
     if transition_code not in ENDED:
         return None
     return min(measured_last_year, range_last)
