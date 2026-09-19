@@ -96,133 +96,125 @@ def test_an_unknown_class_raises_rather_than_defaulting():
 
 @pytest.mark.parametrize("code", [0, 11, -1, 255])
 def test_the_date_derivations_refuse_an_unknown_class_too(code):
-    """T-022. `derive_valid_to(11, ...)` used to return None -- an unknown class read as water that
-    has not ended -- and `derive_valid_from(11, ...)` returned the measured year. `build_feature`
-    was only saved by its kwargs evaluating `change_type=` after the two dates. The guard is one
-    function all three call first, so kwarg order carries nothing."""
+    """T-022. `derive_valid_from(11, ...)` used to return the measured year -- an unknown class read
+    as dated water -- and `build_feature` was only saved by its kwargs evaluating `change_type=`
+    after the date. The guard is one function every derivation calls first, so kwarg order
+    carries nothing. (`derive_valid_to` was the other offender; T-031 deleted it.)"""
     with pytest.raises(water.UnknownTransitionClass, match="documented 1-10"):
-        water.derive_valid_from(code, 1990, 1984)
-    with pytest.raises(water.UnknownTransitionClass, match="documented 1-10"):
-        water.derive_valid_to(code, 2015, 2021)
+        water.derive_valid_from(code, first_seen=1990, last_seen=2015, range_first=1984)
     with pytest.raises(water.UnknownTransitionClass, match="documented 1-10"):
         water.require_documented(code)
 
 
-def test_every_documented_class_still_derives_exactly_as_before():
-    """The guard adds a raise on undefined input and changes nothing on defined input."""
+def test_every_documented_class_derives_as_the_partition_says():
+    """The guard adds a raise on undefined input; on defined input each class follows its set."""
     for code in water.GSW_TRANSITION_CLASSES:
         water.require_documented(code)
         assert water.derive_change_type(code) == water.CHANGE_TYPE_BY_TRANSITION[code]
-        expected_from = 1984 if code in water.PRESENT_AT_START else 1990
-        assert water.derive_valid_from(code, 1990, 1984) == expected_from
-        expected_to = 2015 if code in water.ENDED else None
-        assert water.derive_valid_to(code, 2015, 2021) == expected_to
+        got = water.derive_valid_from(code, first_seen=1990, last_seen=2015, range_first=1984)
+        if code in water.STABLE_FROM_START:
+            assert got == 1984
+        elif code in water.ARRIVED:
+            assert got == 1990
+        elif code in water.ENDED:
+            assert got == 2016
+        else:
+            assert code in water.EPOCH_VERDICT and got == config.GSW_EPOCH_2_FIRST_YEAR
 
 
-# --- valid_from / valid_to derivation ---------------------------------------------------------
+# --- valid_from: the year a class's verdict applies -------------------------------------------
 
 
-def test_classes_present_at_the_start_are_dated_to_the_record_not_measured():
+def test_the_four_sets_partition_the_roster():
+    sets = (water.STABLE_FROM_START, water.ARRIVED, water.ENDED, water.EPOCH_VERDICT)
+    assert frozenset().union(*sets) == frozenset(water.GSW_TRANSITION_CLASSES)
+    assert sum(len(x) for x in sets) == len(water.GSW_TRANSITION_CLASSES), "a class is in two sets"
+
+
+def test_the_partition_follows_jrcs_class_names_rather_than_a_hand_kept_list():
+    """Same structural guard T-021 gave `ENDED`, now over all four sets: JRC's naming is the rule
+    and is checkable. A class arrived if it is `new ...`; ended if `lost ...` or `ephemeral ...`;
+    is an epoch verdict if its name is one state ` to ` another; and is present throughout
+    otherwise. Class 7 went missing from the old list once because it reads as an arrival."""
+    for code, name in water.GSW_TRANSITION_CLASSES.items():
+        expected = (
+            water.ARRIVED
+            if _jrc_name_starts(code, "new ")
+            else water.ENDED
+            if _jrc_name_starts(code, "lost ", "ephemeral ")
+            else water.EPOCH_VERDICT
+            if " to " in name
+            else water.STABLE_FROM_START
+        )
+        assert code in expected, f"class {code} ({name}) is in the wrong set"
+
+
+def test_classes_present_throughout_are_dated_to_the_record_not_measured():
     """The bug that dated 石門水庫 (dam 1964) and 曾文水庫 (1973) to the late 1980s: GSW has no
     usable observation of Taiwan in 1985, so a measured onset dates the observation, not the
-    water. For a class JRC defines as already-water in epoch 1, the measurement is ignored."""
-    for code in (1, 3, 4, 6, 7, 8):
-        assert water.derive_valid_from(code, 1988, 1984) == 1984
-
-
-def test_present_at_start_follows_jrcs_class_names_rather_than_a_hand_kept_list():
-    """`seasonal to permanent` (7) was missed on the first pass because it reads as an arrival:
-    it is a `gain`, so it was grouped with `new permanent` and `new seasonal` and given a measured
-    onset -- which put water JRC says was already there in epoch 1 back in the blind 1988-93 years,
-    the exact artefact this module exists to remove.
-
-    JRC's naming is the rule and is checkable, so check it rather than re-listing the codes: a
-    class is already-water in epoch 1 unless it arrived (`new ...`) or never held either epoch's
-    stable state (`ephemeral ...`).
-    """
-    for code, name in water.GSW_TRANSITION_CLASSES.items():
-        arrived_or_flickered = _jrc_name_starts(code, "new ", "ephemeral ")
-        assert (code in water.PRESENT_AT_START) is not arrived_or_flickered, (
-            f"class {code} ({name}) is on the wrong side of PRESENT_AT_START"
+    water. For a class JRC says held its state through both epochs, the measurement is ignored."""
+    for code in water.STABLE_FROM_START:
+        assert (
+            water.derive_valid_from(code, first_seen=1988, last_seen=2021, range_first=1984) == 1984
         )
-
-
-def test_water_already_there_in_epoch_one_is_never_dated_by_measurement():
-    """The measured onset cannot answer class 7's question even in principle: `water_stats_image`
-    tags a year wherever `waterClass >= WATER_CLASS_SEASONAL`, so it reports the first year the
-    pixel was seen as *any* water, never the year it became permanent."""
-    assert water.derive_valid_from(7, 1991, 1984) == 1984
-    assert water.derive_valid_to(7, 2015, 2021) is None  # becoming permanent is not an ending
-    assert water.derive_change_type(7) == "gain"  # and the change is still carried
 
 
 def test_arriving_classes_keep_their_measured_onset():
     """翡翠水庫's dam finished in 1987 -- the control proving the fix does not simply flatten
     every date to the start of the record."""
-    assert water.derive_valid_from(2, 1988, 1984) == 1988
-    assert water.derive_valid_from(5, 2016, 1984) == 2016
+    assert water.derive_valid_from(2, first_seen=1988, last_seen=2021, range_first=1984) == 1988
+    assert water.derive_valid_from(5, first_seen=2016, last_seen=2021, range_first=1984) == 2016
 
 
 def test_a_measured_onset_cannot_fall_outside_the_published_range():
-    assert water.derive_valid_from(2, 1979, 1984) == 1984
+    assert water.derive_valid_from(2, first_seen=1979, last_seen=2021, range_first=1984) == 1984
 
 
-def test_only_ended_classes_close():
-    """Driven off `ENDED` itself so a class correctly added to it is actually exercised here,
-    rather than passing the membership guard while its closing behaviour goes untested."""
+def test_ended_classes_are_dated_to_the_first_year_the_water_is_gone():
+    """`last_seen` is the last year the water was *seen*; cover's run for it is [f, last_seen + 1),
+    so the loss begins the year after and the two hand off with no year in common -- the relation
+    forest has between [2000, L) and [L, null). Driven off `ENDED` itself, as T-021 asked."""
     for code in water.ENDED:
         name = water.GSW_TRANSITION_CLASSES[code]
-        assert water.derive_valid_to(code, 2015, 2021) == 2015, f"{code} ({name}) did not close"
+        got = water.derive_valid_from(code, first_seen=1984, last_seen=2015, range_first=1984)
+        assert got == 2016, f"{code} ({name}) is not dated to the year after its last water"
 
 
 def test_ended_follows_jrcs_class_names_rather_than_a_hand_kept_list():
-    """Same structural guard as `PRESENT_AT_START`'s, and here for the same reason: every other
-    test of `ENDED` hand-lists codes, so the constant and its checks would be one hand-kept list
-    wearing two hats -- exactly how class 7 went missing from `PRESENT_AT_START`.
-
-    JRC's naming is the rule and is checkable: a class ended iff it was `lost ...` (held its state
-    through epoch 1 and was gone by epoch 2) or `ephemeral ...` (came and went inside the record).
-    """
+    """Every other test of `ENDED` hand-lists codes, so the constant and its checks would be one
+    hand-kept list wearing two hats. JRC's naming is the rule and is checkable: a class ended iff
+    it was `lost ...` or `ephemeral ...`."""
     for code, name in water.GSW_TRANSITION_CLASSES.items():
         ended = _jrc_name_starts(code, "lost ", "ephemeral ")
         assert (code in water.ENDED) is ended, (
             f"class {code} ({name}) is on the wrong side of ENDED"
         )
-    # The loop above only visits the roster, so on its own it cannot see a code in `ENDED` that
-    # JRC never defined. Same containment check `MASK_ON_MANAGED_LAND` already gets.
     assert water.ENDED.issubset(water.GSW_TRANSITION_CLASSES)
 
 
 def test_ended_is_a_strict_subset_of_the_loss_classes():
     """Pins class 8 as the case a looser rule -- `ended iff change_type is loss` -- would get
-    wrong: `permanent to seasonal` is a `loss` that is not an ending. Asserts the constants
-    directly rather than the naming rule, which is
-    `test_ended_follows_jrcs_class_names_rather_than_a_hand_kept_list`'s job."""
+    wrong: `permanent to seasonal` is a `loss` that is not an ending."""
     losses = {c for c, ct in water.CHANGE_TYPE_BY_TRANSITION.items() if ct == "loss"}
     assert 8 in losses
     assert 8 not in water.ENDED
-    assert water.ENDED.issubset(losses)  # ...but every ending is still a loss
+    assert water.ENDED.issubset(losses)
 
 
-def test_persisting_classes_stay_open_ended():
-    """The complement of `ENDED` over the roster, not a hand-kept tuple -- the same anti-pattern
-    that let class 7 go missing. Every class JRC defines is now covered by this test or the one
-    above, whichever side of `ENDED` it falls on."""
-    for code in water.GSW_TRANSITION_CLASSES.keys() - water.ENDED:
-        name = water.GSW_TRANSITION_CLASSES[code]
-        assert water.derive_valid_to(code, 2015, 2021) is None, f"{code} ({name}) closed"
-
-
-def test_declining_water_is_loss_but_has_not_ended():
-    """`permanent to seasonal` is less water than there was, which is a loss -- but the water is
-    still there, so the state is current and the feature stays open-ended."""
+def test_epoch_verdicts_are_dated_to_the_epoch_they_were_judged_in():
+    """7 and 8 are verdicts JRC reaches by comparing its two epochs and carry no year of their
+    own. 1984 would assert the decline (or the gain) held in the epoch where the pixel was the
+    other thing; a measured year would attach a Trace-invented date to a JRC verdict."""
+    for code in water.EPOCH_VERDICT:
+        got = water.derive_valid_from(code, first_seen=1991, last_seen=2015, range_first=1984)
+        assert got == config.GSW_EPOCH_2_FIRST_YEAR
+    assert config.GSW_EPOCH_2_FIRST_YEAR == 2000
+    assert water.derive_change_type(7) == "gain"
     assert water.derive_change_type(8) == "loss"
-    assert water.derive_valid_to(8, 2015, 2021) is None
 
 
-def test_an_end_year_cannot_exceed_the_record():
-    """The record stopping is not the state stopping."""
-    assert water.derive_valid_to(3, 2025, 2021) == 2021
+def test_the_epoch_boundary_sits_inside_the_record():
+    assert config.GSW_FIRST_YEAR < config.GSW_EPOCH_2_FIRST_YEAR < config.GSW_V14_LAST_YEAR
 
 
 # --- the managed-land mask ---------------------------------------------------------------------
@@ -314,7 +306,6 @@ def build(transition_code, **overrides):
         "first_year": 1984,
         "last_year": 2021,
         "range_first": 1984,
-        "range_last": 2021,
         "area_ha": 1.2,
         "gsw_asset": config.GSW_V14_YEARLY,
     }
@@ -339,8 +330,8 @@ def test_built_feature_carries_the_expected_spine_values():
     props = build(6, first_year=1995, last_year=2015)["properties"]  # lost seasonal
 
     assert props["domain"] == "water"
-    assert props["valid_from"] == 1984  # class 6 was water in epoch 1, so not measured
-    assert props["valid_to"] == 2015
+    assert props["valid_from"] == 2016  # the first year the record no longer sees water there
+    assert props["valid_to"] is None  # change accumulates and never closes
     assert props["change_type"] == "loss"
     assert props["subtype"] == "lost seasonal"
     assert props["metric"]["area_ha"] == 1.2
@@ -355,11 +346,11 @@ def test_a_new_body_carries_its_measured_onset_and_stays_open():
     assert props["change_type"] == "gain"
 
 
-def test_still_water_at_the_end_is_open_ended():
-    """The final observed year is not an end date -- the record simply stops there."""
-    props = build(1)["properties"]  # permanent
-    assert props["valid_to"] is None
-    assert props["change_type"] == "stable"
+def test_no_change_feature_ever_closes():
+    """Change accumulates: drawn from the year it applies and for every year after. The schema
+    refuses a change-kind feature with a valid_to, so this is also what lets every class pass."""
+    for code in water.GSW_TRANSITION_CLASSES:
+        assert build(code, first_year=1995, last_year=2015)["properties"]["valid_to"] is None
 
 
 def test_transition_code_becomes_the_named_subtype():
@@ -518,8 +509,8 @@ def test_caveat_admits_the_regions_dropped_as_undatable(monkeypatch):
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
     caveat = water.WaterDomain().caveat
 
-    assert "no onset can be dated" in caveat
-    assert "not yet folded into the percentages" in caveat
+    assert "no year can be dated" in caveat
+    assert "dropped rather than given a guessed one" in caveat
 
 
 def test_caveat_admits_the_early_record_is_blind(monkeypatch):
@@ -533,51 +524,30 @@ def test_caveat_admits_the_early_record_is_blind(monkeypatch):
     assert "1988" in caveat
 
 
-def test_caveat_separates_when_the_water_was_there_from_when_it_went(monkeypatch):
-    """The timeline's first frame paints most of this layer's loss at once, and a reader takes
-    that for an event.
-
-    Three true things compose into a false one: JRC's class is a single verdict over the whole
-    record, `PRESENT_AT_START` dates the classes that held water in epoch 1 to the record's start
-    (correctly -- see the tests above), and the web app's cohorts switch a feature on at
-    `valid_from` and accumulate. So `lost permanent`, `lost seasonal` and `permanent to seasonal`
-    are all red on frame one, down the west coast, where the seasonal-grade classes live.
-
-    Nothing here is fixable in the data -- the classes carry no year for when the water went, and
-    for `permanent to seasonal` there is no such year to carry. So it is stated, with the size,
-    exactly as the layer's other unfixable limits are.
-    """
+def test_caveat_says_change_accumulates_and_when_loss_is_dated(monkeypatch):
+    """T-025, resolved: the first frame used to paint 71% of the loss layer because loss was dated
+    from when the water was there. Now loss is dated to when it went, the epoch verdicts to the
+    epoch, and the caveat says which layer answers which question."""
     monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
     caveat = water.WaterDomain().caveat
 
-    assert "not from when it went" in caveat
-    assert f"{config.WATER_LOSS_DATED_AT_START_PCT:.0f}%" in caveat
-    assert "not water lost that year" in caveat
+    assert "Change accumulates" in caveat
+    assert "first year the yearly record no longer sees water" in caveat
+    assert f"drawn from {config.GSW_EPOCH_2_FIRST_YEAR}" in caveat
+    assert "when the water was there" not in caveat
 
 
-def test_the_loss_dated_at_the_record_start_is_exactly_the_three_classes_counted():
-    """`config.WATER_LOSS_DATED_AT_START_PCT` is measured over one specific set of classes, and
-    nothing about the constant records which. Derive the set here instead, so that moving a class
-    across `CHANGE_TYPE_BY_TRANSITION` or `PRESENT_AT_START` breaks this rather than silently
-    leaving the caveat quoting a share of something else.
+def test_caveat_quotes_the_undatable_share_rather_than_deferring_it(monkeypatch):
+    """Either the measured share or, when the run dropped nothing, that it dropped nothing -- never
+    the old deferral to the run log. Both branches are checked by flipping the constant."""
+    monkeypatch.setattr(water, "gsw_v15_reachable", lambda: False)
+    assert "not yet folded" not in water.WaterDomain().caveat
 
-    Same guard as `PRESENT_AT_START`'s own naming check, one level up: the hand-kept thing is now a
-    number in config, so what gets checked is the population it counts.
-    """
-    dated_at_start = {
-        code
-        for code in water.GSW_TRANSITION_CLASSES
-        if water.derive_change_type(code) == "loss" and code in water.PRESENT_AT_START
-    }
+    monkeypatch.setattr(config, "WATER_UNDATABLE_DROPPED_PCT", 0.0)
+    assert "dropped none" in water.WaterDomain().caveat
 
-    assert dated_at_start == {3, 6, 8}, (
-        "the classes behind WATER_LOSS_DATED_AT_START_PCT have changed -- re-measure it from the "
-        "extracted polygons before shipping, the caveat quotes it as fact"
-    )
-    # And every one of them really does ignore its measured onset, which is what puts them on the
-    # first frame in the first place.
-    for code in dated_at_start:
-        assert water.derive_valid_from(code, 1996, 1984) == 1984
+    monkeypatch.setattr(config, "WATER_UNDATABLE_DROPPED_PCT", 1.25)
+    assert "about 1.25% of the change area" in water.WaterDomain().caveat
 
 
 def test_caveat_names_small_ponds_by_their_local_name(monkeypatch):
@@ -783,3 +753,17 @@ def test_shipped_cover_runs_are_well_formed():
     assert all(p["valid_from"] >= config.GSW_FIRST_YEAR for p in cover)
     bad = [p for p in cover if p["valid_to"] is not None and p["valid_to"] <= p["valid_from"]]
     assert not bad, f"{len(bad)} cover runs end at or before they begin"
+
+
+@pytest.mark.skipif(not _SHIPPED.exists(), reason="no shipped water.geojson (data/ is generated)")
+def test_shipped_change_features_never_close_and_none_is_lost_on_frame_one():
+    """What T-025 was about, checked on the file that ships: no change feature carries an end, and
+    the first frame draws no loss at all -- every loss is dated to a year the record could see it
+    go, and the earliest such year is after the record opens."""
+    features = json.loads(_SHIPPED.read_text(encoding="utf-8"))["features"]
+    change = [f["properties"] for f in features if f["properties"]["change_type"] != "cover"]
+
+    assert change
+    assert all(p["valid_to"] is None for p in change)
+    losses = [p for p in change if p["change_type"] == "loss"]
+    assert min(p["valid_from"] for p in losses) > config.GSW_FIRST_YEAR

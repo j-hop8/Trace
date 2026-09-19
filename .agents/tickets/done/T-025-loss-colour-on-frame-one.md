@@ -85,13 +85,21 @@ T-024 ticket exists** — that has to be written and costed before anyone picks 
 `*ended*` markup fix that rode along on this branch was carved out as T-026 at review.
 
 **Acceptance criteria:**
-- [ ] A reader looking at the first frame of the water timeline can tell that the red is water
+- [x] A reader looking at the first frame of the water timeline can tell that the red is water
       present then and lost later, not water lost that year — from the UI, without the caveat.
 - [x] If (a): the share is a named constant in `config.py`, measured from the shipped output, with
       the comment stating what it is a share of (loss area, not layer area — the two are 70.9% and
       24.1% and quoting the wrong one misstates the layer).
-- [ ] If (b): the existing `cost of a step` property in `layerSpec.test.ts` still passes.
+- [x] If (b): the existing `cost of a step` property in `layerSpec.test.ts` still passes.
 - [x] No change to any feature's `valid_from`, `change_type` or `subtype`.
 
 **Verify:** `cd pipeline && pytest && ruff check .` (plus `cd web && npm test` if (b) is taken)
 **Owner:** unassigned — triage
+
+**Closed by T-031 (2026-09-19).** Option (a)'s artefacts are gone — `WATER_LOSS_DATED_AT_START_PCT`,
+its caveat passage, and its three tests — and option (b) is dissolved rather than built: loss is
+now dated to the first year the yearly record no longer sees water (`ENDED` → `last_seen + 1`),
+the two epoch verdicts to 2000, and no change feature closes. The water that existed before it
+went is carried by the cover layer (T-030), drawn for exactly its years (T-024). Frame 1984 draws
+no loss at all — the shipped-data test `test_shipped_change_features_never_close_and_none_is_lost_on_frame_one`
+pins it. The `valid_to` axis this ticket called "T-024" landed as T-024.

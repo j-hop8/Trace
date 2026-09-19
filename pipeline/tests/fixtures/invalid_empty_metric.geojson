@@ -7,10 +7,22 @@
         "type": "Polygon",
         "coordinates": [
           [
-            [121.2158, 24.9931],
-            [121.2172, 24.9931],
-            [121.2172, 24.9942],
-            [121.2158, 24.9931]
+            [
+              121.2158,
+              24.9931
+            ],
+            [
+              121.2172,
+              24.9931
+            ],
+            [
+              121.2172,
+              24.9942
+            ],
+            [
+              121.2158,
+              24.9931
+            ]
           ]
         ]
       },
@@ -18,7 +30,7 @@
         "domain": "water",
         "valid_from": 1990,
         "valid_to": 2008,
-        "change_type": "loss",
+        "change_type": "cover",
         "metric": {},
         "source": "JRC/GSW1_4/YearlyHistory",
         "method": "JRC GSW YearlyHistory",

@@ -197,9 +197,30 @@ def test_open_ended_state_is_allowed():
     assert feature.properties()["valid_to"] is None
 
 
-def test_same_year_start_and_end_is_allowed():
-    """valid_to is documented half-open, but equality is tolerated until T-031 re-dates water."""
-    assert make_feature(valid_from=1995, valid_to=1995).properties()["valid_to"] == 1995
+def test_same_year_start_and_end_is_an_empty_interval():
+    """Half-open: a pond present for a single year is [1995, 1996), and 1995 -> 1995 is no state.
+    Tolerated until T-031 re-dated water, the last emitter of it."""
+    with pytest.raises(schema.FeatureValidationError, match="empty"):
+        make_feature(valid_from=1995, valid_to=1995)
+    assert make_feature(valid_from=1995, valid_to=1996).properties()["valid_to"] == 1996
+
+
+def test_a_change_feature_cannot_close():
+    """Change accumulates -- drawn from the year it applies and for every year after -- so it never
+    carries an end. Cover is the kind that ends, and the same interval on a cover feature passes."""
+    for change in ("loss", "gain", "stable"):
+        with pytest.raises(schema.FeatureValidationError, match="never closes"):
+            make_feature(change_type=change, valid_from=1990, valid_to=2008)
+        assert (
+            make_feature(change_type=change, valid_from=1990, valid_to=None).properties()[
+                "valid_to"
+            ]
+            is None
+        )
+    assert (
+        make_feature(change_type="cover", valid_from=1990, valid_to=2008).properties()["valid_to"]
+        == 2008
+    )
 
 
 def test_kind_of_matches_the_schema_taxonomy():

@@ -136,24 +136,10 @@ def test_cover_retained_percentage_is_near_total_but_not_over():
     assert 95 <= config.FOREST_COVER_RETAINED_PCT <= 100
 
 
-def test_loss_dated_at_the_record_start_is_a_share_of_loss_not_of_the_layer():
-    """The two readings of this figure differ by a factor of three and only one is the point.
-
-    The same hectares are 70.9% of the layer's loss area and 24.1% of the whole layer. The caveat
-    is about what the first frame of the timeline shows a reader, so it is the loss share that
-    belongs there; quoting the layer share would understate it into looking negligible -- the
-    failure mode the retained-percentage rule exists to prevent, pointed the other way.
-    """
-    assert 0 < config.WATER_LOSS_DATED_AT_START_PCT <= 100
-    # Measured at 70.9%. Anything near 24 means someone swapped in the share-of-layer figure.
-    assert 60 <= config.WATER_LOSS_DATED_AT_START_PCT <= 80
-
-
-def test_most_of_the_loss_layer_is_not_water_that_vanished():
-    """Two separate cuts through the same red, and the caveat needs both to be honest about it:
-    only a few percent of the layer is permanent water that actually disappeared, while most of
-    the loss is dated to the record's start rather than to the year the water went."""
-    assert config.WATER_LOST_PERMANENT_PCT < config.WATER_LOSS_DATED_AT_START_PCT
+def test_undatable_share_is_small():
+    """A few regions where JRC's two products disagree; a large share would mean the rule is
+    dropping real data, not artefacts."""
+    assert 0 <= config.WATER_UNDATABLE_DROPPED_PCT < 5
 
 
 def test_every_hue_is_a_hex_colour():

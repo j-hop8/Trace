@@ -28,6 +28,10 @@ GSW_V14_LAST_YEAR: Final[int] = 2021
 GSW_V15_YEARLY: Final[str] = "projects/global-surface-water/assets/GSW1_5/YearlyHistory"
 GSW_V15_LAST_YEAR: Final[int] = 2024
 GSW_FIRST_YEAR: Final[int] = 1984
+# JRC's `transition` band compares two epochs, 1984-1999 and 2000-2021. A class that is a verdict
+# across the two -- `seasonal to permanent`, `permanent to seasonal` -- carries no year of its own,
+# and the first year of the second epoch is the one date the class itself supplies (T-031).
+GSW_EPOCH_2_FIRST_YEAR: Final[int] = 2000
 GSW_MAPPING_LAYERS: Final[str] = "JRC/GSW1_4/GlobalSurfaceWater"  # occurrence / transition / change
 
 # Taiwan's land boundary. GSW classes ocean as water, so without this the water domain maps the
@@ -181,76 +185,36 @@ FOREST_COVER_RETAINED_PCT: Final[float] = 99.8
 # Re-measure whenever MIN_PATCH_PIXELS or the segmentation changes -- it is quoted to users.
 WATER_RETAINED_PCT: Final[float] = 87.7
 
-# Share of the water area JRC records for Taiwan that survives *both* cuts -- the managed-land rule
-# and the mapping floor -- and so reaches the map. The one number a reader needs to judge the
-# layer's completeness, and the one neither constant above states on its own: WATER_RETAINED_PCT is
-# 87.7% of a post-mask denominator, which is 76.7% of the source, not 87.7% of it.
+# The layer's completeness against what JRC records: post-sieve change area over JRC's full
+# classed water on Taiwan's land, 101,339 of 132,440 ha -- raster to raster, `pixelArea` on both
+# sides at the source grid, island-wide connected components (T-031 / T-020). The previous 75.5
+# divided the shipped vectors (101,567 ha) by a denominator taken from an old commit message
+# (134,600 ha) that no probe had produced; measured, the denominator is 1.6% smaller. The shipped
+# vectors sum ~0.2% above the same pixels' pixelArea, as forest's do, so the vector-over-raster
+# figure would land at 76.7 -- either basis is a share, mixing them is not.
 #
-# 101,567 of 134,600 ha, the shipped vector total against JRC's classed water. Arithmetic over two
-# recorded measurements rather than its own probe, so it is the figure to confirm first on the next
-# full run. It is deliberately the *vector* total and not the 103,175 ha post-sieve raster figure
-# behind WATER_RETAINED_PCT: the ~1.6% between them is lost to vectorizing, cell edges and the
-# undatable regions water.extract drops, and a completeness figure quoted to users has to describe
-# what they actually get rather than what survived one intermediate step.
-#
-# Quoted to one decimal, unlike WATER_RETAINED_PCT: 75.46% stored as 75.5 and then rendered whole
-# would round twice and reach the reader as 76%, overstating completeness by half a point on a
-# formatting artefact. Any figure that lands near a .5 boundary gets the decimal.
-#
-# Re-measure whenever either cut above changes.
-WATER_SOURCE_RETAINED_PCT: Final[float] = 75.5
+# Re-measure whenever MASK_ON_MANAGED_LAND, MIN_PATCH_PIXELS or the GSW asset changes.
+WATER_SOURCE_RETAINED_PCT: Final[float] = 76.5
 
-# Share of the water layer's area that is permanent water which disappeared outright -- JRC's
-# `lost permanent` class alone, 3,547 of 101,567 ha.
+# Share of the shipped water layer that is JRC's `lost permanent` class alone -- water that
+# vanished outright: 3,538 of 101,339 ha, raster to raster, post-sieve (T-031 / T-020, re-verified
+# rather than carried forward; the shipped vectors give 3,547 of 101,567, the same 3.5). Stated
+# because "loss" bundles four JRC classes and only this one is water that is gone.
 #
-# Quoted because `loss` paints about a third of this layer red, and a third of Taiwan's water did
-# not vanish. That red bundles four different JRC classes: water that was only ever ephemeral,
-# seasonal water that went, permanent water that dropped to seasonal but is still there, and only
-# then permanent water that actually went. Stating the threshold without this composition would let
-# a reader take the whole third as disappearance -- the same failure mode the forest caveat's
-# retained-percentage rule exists to prevent.
-#
-# The numerator is untouched by the managed-land rule (class 3 is kept, and T-019 measured every
-# non-masked class unchanged to the hectare) but the *denominator* is not: this read 3.0 against
-# T-017's 117,204 ha layer and was carried through T-018 and T-019 while they cut the layer to
-# 101,567 ha, so the share it states had drifted low by half a point. Recomputed from those two
-# recorded figures rather than re-probed, hence the extra decimal in the caveat -- 3.5 is close
-# enough to the .0f rounding boundary that quoting it whole would flip between 3% and 4% on noise.
-#
-# The per-class composition that used to sit in this comment was measured on the same stale
-# denominator and two of its classes (9 and 10) are cut by the managed-land rule, so it is not
-# rescalable and has been dropped rather than restated wrongly. Re-measure it, and this, on the
-# next full run -- and whenever MASK_ON_MANAGED_LAND changes, since that moves the denominator.
+# Re-measure whenever MASK_ON_MANAGED_LAND or MIN_PATCH_PIXELS changes.
 WATER_LOST_PERMANENT_PCT: Final[float] = 3.5
 
-# Share of the layer's *loss* area that carries the first year of the record -- 24,477 of
-# 34,512 ha: the whole of JRC's `lost permanent` (3), `lost seasonal` (6) and `permanent to
-# seasonal` (8), every feature of which is dated to the record's start.
+# Share of the post-sieve change area dropped as undatable: a region whose class needs a measured
+# year the yearly stack cannot give it -- an arrival never seen as water, an ending never seen as
+# water, or an ending whose last water year is the record's last year, so the end itself was never
+# observed. Dropped rather than dated from the record's edge, which would assert something the
+# source never saw.
 #
-# Quoted because of what those three classes do to the opening frame. All three are in
-# water.PRESENT_AT_START, so derive_valid_from gives each of them the range's first year, and the
-# web app's cohorts switch a feature on at valid_from and then accumulate. The timeline therefore
-# starts with 71% of the layer's loss already painted, and a reader takes that for something that
-# happened in the first year -- the question that raised T-025 was whether the map was comparing
-# the record's first year against the one before it. It is not. The class is a single verdict over
-# the whole record, and the date is only the earliest year the water can honestly be said to have
-# existed; the two are independent, and drawing them together says something neither one does.
-#
-# It reads as a coastline because of where those classes sit rather than anything about the coast:
-# gridded at 0.1 degree the mass is the west-coast strip, 濁水溪 mouth 65% of its cell and 大肚溪
-# 68%, then the 嘉義/台南 aquaculture belt -- tidal flats, river mouths and fish ponds, which is
-# what seasonal-grade water is. Mountain reservoirs are class 1 and stay out of it.
-#
-# A share of LOSS area, not of the layer. The same hectares are 24.1% of the layer's 101,567 ha,
-# and quoting that would understate what the frame shows by a factor of three -- the same failure
-# WATER_LOST_PERMANENT_PCT exists to prevent, pointed the other way.
-#
-# The remaining 29% of loss is the two `ephemeral *` classes. Those are not present at the start,
-# do get a measured onset, and so arrive across the record as they should.
-#
-# Re-measure whenever water.CHANGE_TYPE_BY_TRANSITION or water.PRESENT_AT_START changes -- either
-# moves the numerator -- and whenever MASK_ON_MANAGED_LAND changes, which moves both ends.
-WATER_LOSS_DATED_AT_START_PCT: Final[float] = 70.9
+# Measured zero on the T-031 run: 0 of 133,701 post-sieve regions, GSW v1.4. JRC's two products
+# agree on every region that survives the sieve, and no ending falls on 2021. The rule and the
+# count stay, because an asset version bump is exactly when this stops being zero; `extract`
+# prints the share whenever it is not, and the caveat quotes it.
+WATER_UNDATABLE_DROPPED_PCT: Final[float] = 0.0
 
 # Share of JRC's classed water area removed by the managed-land rule
 # (water.MASK_ON_MANAGED_LAND): 4.7% on built-up ground plus 7.8% on cropland.
