@@ -85,17 +85,17 @@ Tests
 - `test_tiles.py:272,286,313`, `manifest.py:56`: `extent` → `cover`.
 
 **Acceptance criteria:**
-- [ ] `build_cover_feature` behaves as specified above, including the `ValueError` guard.
-- [ ] For every downloaded loss patch, one `loss` and one `cover` share geometry and `area_ha`
+- [x] `build_cover_feature` behaves as specified above, including the `ValueError` guard.
+- [x] For every downloaded loss patch, one `loss` and one `cover` share geometry and `area_ha`
       (stubbed-`download_features` test).
-- [ ] No cover feature in the shipped output has `valid_to <= valid_from` (checked on
+- [x] No cover feature in the shipped output has `valid_to <= valid_from` (checked on
       `data/forest.geojson` by a test that skips when the file is absent).
-- [ ] Manifest measures forest `changeTypes = ["cover", "loss"]` from tilestats.
-- [ ] `FOREST_COVER_RETAINED_PCT` re-measured from the shipped output; comment states numerator,
+- [x] Manifest measures forest `changeTypes = ["cover", "loss"]` from tilestats.
+- [x] `FOREST_COVER_RETAINED_PCT` re-measured from the shipped output; comment states numerator,
       denominator and ratio.
-- [ ] Caveat says cover is drawn until the loss year and not after.
-- [ ] `grep -rn "extent" pipeline/tests/test_tiles.py pipeline/trace_pipeline/manifest.py` → empty.
-- [ ] `tiles.verify` passes with no drops on the regenerated archive.
+- [x] Caveat says cover is drawn until the loss year and not after.
+- [x] `grep -rn "extent" pipeline/tests/test_tiles.py pipeline/trace_pipeline/manifest.py` → empty.
+- [x] `tiles.verify` passes with no drops on the regenerated archive.
 
 **Verify:** `cd pipeline && pytest && ruff check . && ruff format --check . && python -m trace_pipeline.cli extract forest && python -m trace_pipeline.cli tiles forest`
 **Owner:** claude

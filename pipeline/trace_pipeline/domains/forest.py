@@ -51,8 +51,11 @@ CONFIDENCE = 0.8
 #:   4x4      -> 11,889 features / 22 MB / 13 s  <- chosen
 #:   6x6      ->  5,902 features / 11 MB /  8 s
 #:
-#: and re-measured once the blocks carried their loss holes as interior rings (T-029), which is
-#: more geometry per request; see the run log recorded below the constant.
+#: and re-measured once the blocks carried their loss holes as interior rings (T-029). The holes
+#: fragment the mass -- the same cell now comes back as 17,476 blocks rather than 11,889, and
+#: 71,127 island-wide rather than 67,031 -- but 4x4 still clears the request budget, so it stays.
+#: Only 1,368 of the blocks actually carry a ring; the rest of the growth is pieces the holes cut
+#: apart.
 #:
 #: The consequence to remember: an open-cover polygon's `area_ha` is the area of a *block as this
 #: grid cut it*, so summing cover areas is not a way to measure island-wide forest. Any total the
