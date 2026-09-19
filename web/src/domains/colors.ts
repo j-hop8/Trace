@@ -31,28 +31,6 @@ const INK = '#000000';
 const PAPER = '#ffffff';
 const MUTE = '#7d7a74';
 
-/**
- * Bare ground — what is left where a domain's cover has been taken away.
- *
- * Showing a cover honestly means drawing the baseline and removing everything lost by the
- * selected year. MapLibre fills cannot subtract, so the lost patches are painted over the cover in
- * the colour of the ground beneath, and the holes are what remains visible.
- *
- * This tracks the basemap's `earth` fill in `map/basemap/style.json`. It is duplicated here rather
- * than imported because this module is the only place in `web/` allowed to hold a colour literal
- * for data — but if the basemap's ground changes, this changes with it, or the holes stop looking
- * like holes.
- *
- * Exact only over bare earth. The basemap paints `landcover` and `landuse` over it at partial
- * opacity, so above those a hole is a few RGB units darker than the ground beside it — visible, if
- * at all, at high zoom over valley floors. Matching them properly would mean drawing the domain
- * layers underneath those two, which would also put them over the cover fill and tint the whole
- * layer; the seam is the cheaper of the two errors.
- *
- * Ground, not data: this is the one colour here that is not a function of a domain hue.
- */
-export const CLEARED = '#2a2724';
-
 /** How a feature is drawn. Colour and its accessible pairing always travel together. */
 export interface FeatureStyle {
   /** Fill colour. */
