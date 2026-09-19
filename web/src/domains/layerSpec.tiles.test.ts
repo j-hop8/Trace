@@ -120,6 +120,15 @@ const inYear = (props: Record<string, unknown>, year: number, kind: 'cover' | 'c
   return from <= year && year < to;
 };
 
+// With no manifest there is nothing to iterate, and a file that registers no suite at all is a
+// vitest *failure* ("No test suite found"), not a skip — which would turn CI red, where `data/`
+// never exists. So the absent-data case is a suite that is skipped on purpose and says why.
+if (domains.length === 0) {
+  describe.skip('cohorts against the built tilesets', () => {
+    it('needs data/domains.json — run the pipeline to build it', () => {});
+  });
+}
+
 describe.each(domains)('cohorts against the built $entry.id tileset', ({ entry, runnable }) => {
   let features: Feature[] = [];
 
