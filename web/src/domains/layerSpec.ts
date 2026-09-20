@@ -17,9 +17,10 @@ import type {
 } from 'maplibre-gl';
 
 import { styleFor } from '@/domains/colors';
+import { kindsOf } from '@/domains/manifest';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import { CHANGE_TYPE_ORDER, KIND_OF } from '@/types/feature';
-import type { ChangeType } from '@/types/feature';
+import type { ChangeType, Kind } from '@/types/feature';
 
 /** Image id for the diagonal hatch registered on the map. */
 export const HATCH_IMAGE = 'trace-hatch';
@@ -33,7 +34,22 @@ export const HATCH_IMAGE = 'trace-hatch';
  */
 const SCALE_SPLIT_ZOOM = 11;
 
-export const sourceId = (domainId: string) => `trace-${domainId}`;
+/**
+ * The map source one kind of a domain is read through: `trace-forest-cover`, `trace-forest-change`.
+ *
+ * One *archive* per domain, still — both sources name the same `tiles.url` — but one MapLibre
+ * source per kind, because that is what lets the kinds arrive one after the other. A source is
+ * parsed whole: adding a layer to it, or showing a hidden one, re-runs every visible layer over
+ * every loaded tile, and cover is three quarters of that work. Two sources on the same archive
+ * parse only their own layers, so the change source going on costs the change layers and nothing
+ * else, and cover stays on screen untouched while it does. The tile bytes are fetched once for
+ * both — see `sharedTiles` in `usePmtilesProtocol`.
+ */
+export const sourceId = (domainId: string, kind: Kind) => `trace-${domainId}-${kind}`;
+
+/** Every source a domain reads through, in the order its stages go on. */
+export const sourceIdsFor = (entry: DomainManifestEntry) =>
+  kindsOf(entry).map((kind) => sourceId(entry.id, kind));
 
 /**
  * The years a *change* role's layers are split across — one cohort per year of the coverage.
@@ -627,18 +643,28 @@ export function opacityUpdatesFor(
   });
 }
 
-export interface DomainLayers {
+/**
+ * One kind of a domain, ready to go on the map: its source and the layers that read it.
+ *
+ * `stagesFor` returns these in `kindsOf` order, and the map adds them in that order — the next
+ * only once the previous source reports loaded — so cover is on screen while change is still
+ * being parsed. Which kind a role belongs to follows from its change type (`KIND_OF`), the same
+ * rule that picks its cohort model and its toggle group.
+ */
+export interface DomainStage {
+  kind: Kind;
   sourceId: string;
   source: { type: 'vector'; url: string; attribution: string };
   layers: (FillLayerSpecification | LineLayerSpecification)[];
 }
 
-export function layersFor(
+export function stageFor(
   entry: DomainManifestEntry,
+  kind: Kind,
   year: number,
   selected: ReadonlySet<ChangeType>,
-): DomainLayers {
-  const source = sourceId(entry.id);
+): DomainStage {
+  const source = sourceId(entry.id, kind);
 
   // Built by walking the same table that produces the ids, the opacities and the visibility sets,
   // in the same order. There is no second list to fall out of step with.
@@ -646,37 +672,63 @@ export function layersFor(
   // Roles are the outer loop and cohorts the inner one, which keeps the role order — and with it
   // the rule that cover is the ground and loss is drawn last. Interleaving the two would scatter
   // each role's cohorts through the draw order and lose that.
-  const layers = rolesFor(entry).flatMap((role) => {
-    const built = builtFor(entry, role);
-    const { key, shown } = opacityChannel(built);
-    const visibility = selected.has(role.changeType) ? 'visible' : 'none';
+  const layers = rolesFor(entry)
+    .filter((role) => KIND_OF[role.changeType] === kind)
+    .flatMap((role) => {
+      const built = builtFor(entry, role);
+      const { key, shown } = opacityChannel(built);
+      const visibility = selected.has(role.changeType) ? 'visible' : 'none';
 
-    return cohortsOf(entry, role).map(
-      (c) =>
-        ({
-          id: c.id,
-          type: built.type,
-          source,
-          'source-layer': c.sourceLayer,
-          filter: c.filter,
-          layout: { visibility },
-          paint: {
-            ...built.paint,
-            [key]: c.shown(year) ? shown : 0,
-            // A cohort appears the instant its year arrives. The default 300ms fade would still be
-            // running two years later at playback speed, leaving the map showing a half-drawn year
-            // while the readout named it outright.
-            [`${key}-transition`]: { duration: 0, delay: 0 },
-          },
-        }) as unknown as FillLayerSpecification | LineLayerSpecification,
-    );
-  });
+      return cohortsOf(entry, role).map(
+        (c) =>
+          ({
+            id: c.id,
+            type: built.type,
+            source,
+            'source-layer': c.sourceLayer,
+            filter: c.filter,
+            layout: { visibility },
+            paint: {
+              ...built.paint,
+              [key]: c.shown(year) ? shown : 0,
+              // A cohort appears the instant its year arrives. The default 300ms fade would still
+              // be running two years later at playback speed, leaving the map showing a half-drawn
+              // year while the readout named it outright.
+              [`${key}-transition`]: { duration: 0, delay: 0 },
+            },
+          }) as unknown as FillLayerSpecification | LineLayerSpecification,
+      );
+    });
 
   return {
+    kind,
     sourceId: source,
     source: { type: 'vector', url: entry.tiles.url, attribution: entry.source.attribution },
     layers,
   };
+}
+
+/** Every stage of a domain, in the order they go on the map. */
+export function stagesFor(
+  entry: DomainManifestEntry,
+  year: number,
+  selected: ReadonlySet<ChangeType>,
+): DomainStage[] {
+  return kindsOf(entry).map((kind) => stageFor(entry, kind, year, selected));
+}
+
+/**
+ * Every layer a domain builds, across all its stages, in draw order.
+ *
+ * What the map ends up holding once every stage is on. The tests read this; the map itself adds
+ * stage by stage.
+ */
+export function layersFor(
+  entry: DomainManifestEntry,
+  year: number,
+  selected: ReadonlySet<ChangeType>,
+): (FillLayerSpecification | LineLayerSpecification)[] {
+  return stagesFor(entry, year, selected).flatMap((stage) => stage.layers);
 }
 
 /**

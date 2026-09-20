@@ -24,6 +24,12 @@ export const KIND_OF: Record<ChangeType, Kind> = {
 };
 
 /**
+ * The kinds in the order they are drawn, listed and loaded: the ground first, then what happened
+ * to it. `CHANGE_TYPE_ORDER` below is this same order one level down.
+ */
+export const KIND_ORDER: readonly Kind[] = ['cover', 'change'];
+
+/**
  * Every change type, in the order they should be drawn and listed.
  *
  * Not the union's declaration order, which is alphabetical and meaningless on a map. This runs from

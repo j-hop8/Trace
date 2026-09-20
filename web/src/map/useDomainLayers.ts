@@ -7,12 +7,15 @@ import {
   layerIdsFor,
   layerIdsForSelection,
   layerIdsForYear,
-  layersFor,
   opacityUpdatesFor,
   sourceId,
+  sourceIdsFor,
+  stageFor,
 } from '@/domains/layerSpec';
+import { kindsOf } from '@/domains/manifest';
+import type { DomainManifestEntry } from '@/domains/manifest';
 import { useTraceStore } from '@/store/useTraceStore';
-import type { DomainId, TraceFeatureProperties } from '@/types/feature';
+import type { DomainId, Kind, TraceFeatureProperties } from '@/types/feature';
 
 /**
  * How long the basemap gets to paint before the domain layers are allowed on.
@@ -57,8 +60,9 @@ const RELOAD_TIMEOUT_MS = 15000;
  * layers come and go as the manifest loads and layers are toggled. Keeping them in one effect
  * would rebuild the map whenever a toggle changed.
  *
- * Sources are added once per domain and never swapped, and the year is applied as **opacity**, not
- * as a filter — see `cohortFilter` and `intervalNodes` in layerSpec for why the layers are split.
+ * Sources are added once per domain *and kind* and never swapped — cover's first, change's once
+ * cover has drawn, see `sourceId` in layerSpec — and the year is applied as **opacity**, not as a
+ * filter — see `cohortFilter` and `intervalNodes` there for why the layers are split.
  *
  * That distinction is the whole performance story. `setFilter` routes through `Style._updateLayer`
  * to `_reloadSource`, which re-parses every loaded tile in the worker: decode, re-filter,
@@ -79,7 +83,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   const selectedTypesFor = useTraceStore((s) => s.selectedTypesFor);
   const year = useTraceStore((s) => s.year);
   const setRenderedYear = useTraceStore((s) => s.setRenderedYear);
-  const setLoadingDomains = useTraceStore((s) => s.setLoadingDomains);
+  const setLoadingKinds = useTraceStore((s) => s.setLoadingKinds);
   const select = useTraceStore((s) => s.select);
 
   /** Latest year asked for. Overwritten freely; only ever read by `pump`. */
@@ -112,15 +116,22 @@ export function useDomainLayers(map: maplibregl.Map | null) {
    */
   const pumpAgain = useRef<() => void>(() => {});
   /**
-   * Domains seen fully loaded at least once since their source was (last) added.
+   * Sources seen fully loaded at least once since they were (last) added.
    *
    * A ref, not effect-local state: the loading-report effect below re-runs on every domain toggle,
-   * and re-deriving this from scratch each time would forget an unrelated, still-loaded domain the
+   * and re-deriving this from scratch each time would forget an unrelated, still-loaded source the
    * instant any other domain is switched on or off, showing its badge again on a coincidence of
-   * timing rather than anything about that domain. Cleared per-domain when its source is actually
-   * torn down, in the effect below that owns that lifecycle.
+   * timing rather than anything about that domain. Cleared per-source when it is actually torn
+   * down, in the effect below that owns that lifecycle.
    */
-  const everLoaded = useRef(new Set<DomainId>());
+  const everLoaded = useRef(new Set<string>());
+  /**
+   * How many of each domain's kinds are on the map, counted in `kindsOf` order.
+   *
+   * The map's own state, mirrored so the staging effect can tell "the next kind is due" from
+   * "the next kind is already on" without walking the style on every `sourcedata` event.
+   */
+  const staged = useRef(new Map<DomainId, number>());
 
   /** Whether the basemap has had its turn — see `FIRST_PAINT_GRACE_MS`. */
   const [basemapPainted, setBasemapPainted] = useState(false);
@@ -128,8 +139,13 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   useEffect(() => {
     if (!map) return;
     // Reset for this map instance: `basemapPainted` otherwise carries a stale `true` forward if
-    // the map is ever rebuilt, letting domain layers straight onto a fresh, unpainted map.
+    // the map is ever rebuilt, letting domain layers straight onto a fresh, unpainted map — and
+    // the refs below describe sources and layers the old map took with it.
     setBasemapPainted(false);
+    staged.current.clear();
+    everLoaded.current.clear();
+    applied.current.clear();
+    committed.current = null;
 
     let timer = 0;
 
@@ -167,91 +183,148 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     map.addImage(HATCH_IMAGE, createHatchImage(), { pixelRatio: 2 });
   }, [map]);
 
-  // Add and remove whole domains, once the basemap has had its turn.
+  // Add and remove whole domains, once the basemap has had its turn — one kind at a time.
+  //
+  // A domain goes on in stages, in `kindsOf` order: its cover source and layers first, and its
+  // change source only once the cover source reports loaded. Cover is three quarters of the parse
+  // (`sourceId` in layerSpec has the numbers), so this is what puts the ground on screen before
+  // the changes have been worked out, instead of nothing until both have. The wait is on the
+  // domain's own previous source, not on every domain: the worker pool parses tiles in the order
+  // they arrive, so holding one domain's change back for another's cover would gain nothing.
   useEffect(() => {
     if (!map || !manifest) return;
     // Only ever gates the first add: once true this stays true, so later toggles are immediate.
     if (!basemapPainted) return;
 
-    for (const entry of manifest.domains) {
-      const shouldBeVisible = activeDomains.has(entry.id);
-      const present = Boolean(map.getSource(sourceId(entry.id)));
+    /** Put one kind of a domain on the map: its source, then its layers in draw order. */
+    const addStage = (entry: DomainManifestEntry, kind: Kind) => {
+      // Built with the year current at this moment, so a stage arriving mid-scrub lands on the
+      // year being asked for rather than the one the domain was switched on at.
+      const stage = stageFor(entry, kind, requested.current, selectedTypesFor(entry.id));
+      map.addSource(stage.sourceId, stage.source);
+      // Computed once: each layer goes in before the same neighbour, so the stage keeps its own
+      // order and lands directly after the domain's earlier stages.
+      const beforeId = beforeIdFor(map, entry);
+      for (const layer of stage.layers) map.addLayer(layer, beforeId);
+    };
 
-      if (shouldBeVisible && !present) {
-        const spec = layersFor(entry, year, selectedTypesFor(entry.id));
-        map.addSource(spec.sourceId, spec.source);
-        // Under the basemap's labels, not over them. Appending with no `beforeId` puts data on
-        // top of everything, and the cover layer is a near-solid mass -- it covered every place
-        // name in the central range, so the reader could see the forest and not where it was.
-        // Found by type rather than by id so it survives a basemap whose label layer is renamed.
-        const firstSymbol = map.getStyle().layers.find((layer) => layer.type === 'symbol')?.id;
-        for (const layer of spec.layers) map.addLayer(layer, firstSymbol);
-      } else if (!shouldBeVisible && present) {
-        for (const id of layerIdsFor(entry)) {
-          if (map.getLayer(id)) map.removeLayer(id);
-        }
-        map.removeSource(sourceId(entry.id));
-        // The layers those opacities described are gone; a stale cache would skip re-applying them
-        // to the fresh ones if the domain came back at the same year. Scoped to this domain's own
-        // ids — the still-active domains' cached opacities are still accurate and clearing them too
-        // would force every one of their layers to be reapplied on the next pump for nothing.
-        for (const id of layerIdsFor(entry)) applied.current.delete(id);
-        // The source that made this true is gone; a domain switched back on gets a fresh load
-        // window rather than skipping straight past it on the strength of a source that no longer
-        // exists.
-        everLoaded.current.delete(entry.id);
+    /** Take every stage of a domain off the map. */
+    const remove = (entry: DomainManifestEntry) => {
+      for (const id of layerIdsFor(entry)) {
+        if (map.getLayer(id)) map.removeLayer(id);
+        // The layers those opacities described are gone; a stale cache would skip re-applying
+        // them to the fresh ones if the domain came back at the same year. Scoped to this
+        // domain's own ids — the still-active domains' cached opacities are still accurate and
+        // clearing them too would force every one of their layers to be reapplied on the next
+        // pump for nothing.
+        applied.current.delete(id);
       }
-    }
-    // Adding or removing a source starts loads of its own, and an in-flight year commit cannot tell
-    // those apart from a reload of its own. Abandon the wait and force the next pump to re-apply,
-    // so a toggle mid-playback recovers instead of wedging.
-    return () => cancelCommit.current?.();
-    // `year` and the state selection are read when a layer is first added but are not dependencies:
+      for (const id of sourceIdsFor(entry)) {
+        if (map.getSource(id)) map.removeSource(id);
+        // The source that made this true is gone; a domain switched back on gets a fresh load
+        // window rather than skipping straight past it on the strength of a source that no
+        // longer exists.
+        everLoaded.current.delete(id);
+      }
+      staged.current.delete(entry.id);
+    };
+
+    const settle = () => {
+      let added = false;
+
+      for (const entry of manifest.domains) {
+        const kinds = kindsOf(entry);
+        const have = staged.current.get(entry.id) ?? 0;
+
+        if (!activeDomains.has(entry.id)) {
+          if (have > 0) remove(entry);
+          continue;
+        }
+        const next = kinds[have];
+        if (next === undefined) continue;
+        // `getSource` first: `isSourceLoaded` raises an error event for a source the map does
+        // not have, and a source removed underneath a stale count must not advance anything.
+        const previous = have > 0 ? kinds[have - 1] : undefined;
+        if (previous !== undefined) {
+          const id = sourceId(entry.id, previous);
+          if (!map.getSource(id) || !map.isSourceLoaded(id)) continue;
+        }
+
+        addStage(entry, next);
+        staged.current.set(entry.id, have + 1);
+        added = true;
+      }
+
+      // Adding a source starts loads of its own, and an in-flight year commit cannot tell those
+      // apart from a reload of its own. Abandon the wait and pump again, so the new layers are
+      // brought to the year in hand and the readout is not left waiting on a settle that would
+      // report the wrong thing.
+      if (added) {
+        cancelCommit.current?.();
+        pumpAgain.current();
+      }
+    };
+
+    // Every tile that finishes fires this, so a stage goes on within a frame of the one before
+    // it reporting loaded.
+    map.on('sourcedata', settle);
+    settle();
+
+    return () => {
+      map.off('sourcedata', settle);
+      // Removing a source mid-flight is the same problem as adding one — see `settle`.
+      cancelCommit.current?.();
+    };
+    // `year` and the state selection are read when a stage is added but are not dependencies:
     // re-adding sources on every tick or toggle would refetch tiles and defeat the whole point.
     // Both are applied to live layers by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, manifest, activeDomains, basemapPainted]);
 
-  // Report which switched-on domains have nothing on screen yet.
+  // Report which kinds of each switched-on domain have nothing on screen yet.
   //
-  // Two windows produce one, and they look identical to the reader: the grace period above, where
-  // the source does not exist at all, and the tile load that follows it. Both show a lit toggle
-  // over an empty map, which is exactly what a layer with no data for the year looks like.
+  // Three windows produce one, and they look identical to the reader: the grace period above,
+  // where no source exists at all; the tile load that follows it; and, once the first kind is
+  // drawn, the next kind's own load. All three show a lit control over a map missing something,
+  // which is exactly what a layer with no data for the year looks like.
   useEffect(() => {
     if (!map || !manifest) return;
 
-    // Bounds the badge to the two windows the comment above names: without checking `everLoaded`,
-    // a later `sourcedata` event from panning into fresh tiles for an already-loaded domain would
-    // flip the badge back on for data the reader has already been looking at.
-    const domainSourceIds = new Set(manifest.domains.map((entry) => sourceId(entry.id)));
+    const domainSourceIds = new Set(manifest.domains.flatMap(sourceIdsFor));
 
     const update = (e?: maplibregl.MapSourceDataEvent) => {
       // Most `sourcedata` events name the one source that changed; ignore it outright if that
       // source belongs to no domain, rather than re-checking every active domain for nothing.
       if (e?.sourceId && !domainSourceIds.has(e.sourceId)) return;
 
-      const loading = new Set<DomainId>();
+      const loading = new Map<DomainId, Set<Kind>>();
 
       for (const entry of manifest.domains) {
         if (!activeDomains.has(entry.id)) continue;
-        if (everLoaded.current.has(entry.id)) continue;
 
-        const id = sourceId(entry.id);
-        // `getSource` first: `isSourceLoaded` raises an error event for a source the map does not
-        // have, which during the grace period is every one of them.
-        if (!map.getSource(id) || !map.isSourceLoaded(id)) {
-          loading.add(entry.id);
-        } else {
-          everLoaded.current.add(entry.id);
+        for (const kind of kindsOf(entry)) {
+          const id = sourceId(entry.id, kind);
+          // Bounds the badge to the windows named above: without this, a later `sourcedata` event
+          // from panning into fresh tiles for an already-loaded source would flip the badge back
+          // on for data the reader has already been looking at.
+          if (everLoaded.current.has(id)) continue;
+
+          // `getSource` first: `isSourceLoaded` raises an error event for a source the map does
+          // not have, which during the grace period is every one of them.
+          if (!map.getSource(id) || !map.isSourceLoaded(id)) {
+            let kinds = loading.get(entry.id);
+            if (!kinds) loading.set(entry.id, (kinds = new Set()));
+            kinds.add(kind);
+          } else {
+            everLoaded.current.add(id);
+          }
         }
       }
 
       // Written only when the membership actually changed. `sourcedata` fires per tile, and a fresh
-      // Set each time is a new reference as far as zustand is concerned — the toggles would
+      // Map each time is a new reference as far as zustand is concerned — the toggles would
       // re-render continuously for as long as tiles kept arriving.
-      const current = useTraceStore.getState().loadingDomains;
-      const unchanged = loading.size === current.size && [...loading].every((d) => current.has(d));
-      if (!unchanged) setLoadingDomains(loading);
+      if (!sameReport(loading, useTraceStore.getState().loadingKinds)) setLoadingKinds(loading);
     };
 
     map.on('sourcedata', update);
@@ -260,7 +333,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
     return () => {
       map.off('sourcedata', update);
     };
-  }, [map, manifest, activeDomains, basemapPainted, setLoadingDomains]);
+  }, [map, manifest, activeDomains, basemapPainted, setLoadingKinds]);
 
   // Apply the state selection. Every change type's layers already exist, so this is a visibility
   // switch — no source churn, no refetch, and the toggle is instant.
@@ -296,8 +369,11 @@ export function useDomainLayers(map: maplibregl.Map | null) {
 
     for (const entry of manifest.domains) {
       if (!activeDomains.has(entry.id)) continue;
-      if (!map.getSource(sourceId(entry.id))) continue;
-      sources.push(sourceId(entry.id));
+      // Whichever of the domain's stages are on so far; a stage still to come has no layers to
+      // set and is not waited on.
+      const present = sourceIdsFor(entry).filter((id) => map.getSource(id));
+      if (present.length === 0) continue;
+      sources.push(...present);
 
       // Every layer, including the ones the current view has hidden: a hidden layer left at the
       // wrong opacity would show the wrong year the instant the toggle brought it back.
@@ -487,4 +563,40 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       map.getCanvas().style.cursor = '';
     };
   }, [map, manifest, select]);
+}
+
+/**
+ * Where a domain's next layer goes: directly after its last one on the map, so a later stage
+ * lands behind the earlier ones and each domain stays contiguous in the draw order. For a
+ * domain's first layer, under the basemap's labels: appending with no `beforeId` puts data on top
+ * of everything, and the cover layer is a near-solid mass — it covered every place name in the
+ * central range, so the reader could see the forest and not where it was. The label layer is
+ * found by type rather than by id so it survives a basemap whose label layer is renamed.
+ */
+function beforeIdFor(map: maplibregl.Map, entry: DomainManifestEntry): string | undefined {
+  const order = map.getLayersOrder();
+  const own = new Set(layerIdsFor(entry));
+
+  let last = -1;
+  order.forEach((id, i) => {
+    if (own.has(id)) last = i;
+  });
+  // `undefined` when the domain's last layer is the map's last: append.
+  if (last >= 0) return order[last + 1];
+
+  return order.find((id) => map.getLayer(id)?.type === 'symbol');
+}
+
+/** Whether two loading reports name the same kinds of the same domains. */
+function sameReport(
+  a: Map<DomainId, ReadonlySet<Kind>>,
+  b: Map<DomainId, ReadonlySet<Kind>>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [domain, kinds] of a) {
+    const other = b.get(domain);
+    if (!other || other.size !== kinds.size) return false;
+    for (const kind of kinds) if (!other.has(kind)) return false;
+  }
+  return true;
 }

@@ -1,5 +1,5 @@
 /**
- * `loadingDomains` — which switched-on domains have nothing on screen yet.
+ * `loadingKinds` — which kinds of each switched-on domain have nothing on screen yet.
  *
  * The map owns *setting* this (it is the only thing that knows whether a source's tiles have
  * arrived), so what is worth pinning down here is the half the map does not own: that switching a
@@ -10,75 +10,96 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { useTraceStore } from '@/store/useTraceStore';
-import type { DomainId } from '@/types/feature';
+import type { DomainId, Kind } from '@/types/feature';
 
 const pristine = useTraceStore.getState();
 
-const ids = (set: Set<DomainId>) => [...set].sort();
+const ids = (set: Iterable<DomainId>) => [...set].sort();
+
+/** The report as plain data, for comparing: each domain's missing kinds, sorted. */
+const report = () =>
+  Object.fromEntries(
+    [...useTraceStore.getState().loadingKinds].map(([domain, kinds]) => [
+      domain,
+      [...kinds].sort(),
+    ]),
+  );
+
+const kinds = (...list: Kind[]) => new Set<Kind>(list);
 
 beforeEach(() => {
   // Replace rather than merge, so one test's leftovers cannot decide another's outcome.
   useTraceStore.setState(pristine, true);
 });
 
-describe('loadingDomains', () => {
+describe('loadingKinds', () => {
   it('starts empty — nothing is loading before anything is asked for', () => {
-    expect(useTraceStore.getState().loadingDomains.size).toBe(0);
+    expect(useTraceStore.getState().loadingKinds.size).toBe(0);
   });
 
   it('is whatever the map last reported', () => {
-    useTraceStore.getState().setLoadingDomains(new Set(['forest', 'water']));
+    useTraceStore.getState().setLoadingKinds(
+      new Map([
+        ['forest', kinds('cover', 'change')],
+        ['water', kinds('change')],
+      ]),
+    );
 
-    expect(ids(useTraceStore.getState().loadingDomains)).toEqual(['forest', 'water']);
+    expect(report()).toEqual({ forest: ['change', 'cover'], water: ['change'] });
   });
 
   it('clears when the map reports the tiles arrived', () => {
-    useTraceStore.getState().setLoadingDomains(new Set(['forest']));
-    useTraceStore.getState().setLoadingDomains(new Set());
+    useTraceStore.getState().setLoadingKinds(new Map([['forest', kinds('cover')]]));
+    useTraceStore.getState().setLoadingKinds(new Map());
 
-    expect(useTraceStore.getState().loadingDomains.size).toBe(0);
+    expect(useTraceStore.getState().loadingKinds.size).toBe(0);
   });
 
   it('drops a domain that is switched off while still loading', () => {
     useTraceStore.setState({ activeDomains: new Set(['forest']) });
-    useTraceStore.getState().setLoadingDomains(new Set(['forest']));
+    useTraceStore.getState().setLoadingKinds(new Map([['forest', kinds('cover', 'change')]]));
 
     useTraceStore.getState().toggleDomain('forest');
 
     expect(useTraceStore.getState().activeDomains.has('forest')).toBe(false);
-    expect(useTraceStore.getState().loadingDomains.has('forest')).toBe(false);
+    expect(useTraceStore.getState().loadingKinds.has('forest')).toBe(false);
   });
 
   it('leaves the other domains alone when one is switched off', () => {
     useTraceStore.setState({ activeDomains: new Set(['forest', 'water']) });
-    useTraceStore.getState().setLoadingDomains(new Set(['forest', 'water']));
+    useTraceStore.getState().setLoadingKinds(
+      new Map([
+        ['forest', kinds('change')],
+        ['water', kinds('change')],
+      ]),
+    );
 
     useTraceStore.getState().toggleDomain('forest');
 
-    expect(ids(useTraceStore.getState().loadingDomains)).toEqual(['water']);
+    expect(report()).toEqual({ water: ['change'] });
   });
 
-  it('marks every domain loading the moment the manifest lands', () => {
+  it('marks every kind of every domain loading the moment the manifest lands', () => {
     // Not a guess: the layers are held back until the basemap has painted, so at this instant they
-    // really are all switched on and showing nothing.
+    // really are all switched on and showing nothing — and each kind will arrive on its own.
     useTraceStore.getState().setManifest({
-      version: 1,
+      version: 2,
       domains: [
-        { id: 'forest', temporal: { start: 2001, end: 2025 } },
-        { id: 'water', temporal: { start: 1984, end: 2024 } },
+        { id: 'forest', changeTypes: ['cover', 'loss'], temporal: { start: 2001, end: 2025 } },
+        { id: 'water', changeTypes: ['gain', 'loss'], temporal: { start: 1984, end: 2024 } },
       ],
     } as never);
 
-    expect(ids(useTraceStore.getState().loadingDomains)).toEqual(['forest', 'water']);
+    expect(report()).toEqual({ forest: ['change', 'cover'], water: ['change'] });
   });
 
   it('does not mark a domain as loading just because it was switched on', () => {
-    // Only the map can say that, and it says so through `setLoadingDomains`. Guessing here would
+    // Only the map can say that, and it says so through `setLoadingKinds`. Guessing here would
     // badge a domain whose tiles are already cached and arrive in the same frame.
     useTraceStore.getState().toggleDomain('forest');
 
     expect(useTraceStore.getState().activeDomains.has('forest')).toBe(true);
-    expect(useTraceStore.getState().loadingDomains.has('forest')).toBe(false);
+    expect(useTraceStore.getState().loadingKinds.has('forest')).toBe(false);
   });
 });
 
@@ -162,12 +183,17 @@ describe('selectedTypes', () => {
   });
 
   it('stops claiming to load a domain its last state just closed', () => {
-    useTraceStore.getState().setLoadingDomains(new Set(['forest', 'water']));
+    useTraceStore.getState().setLoadingKinds(
+      new Map([
+        ['forest', kinds('change')],
+        ['water', kinds('change')],
+      ]),
+    );
 
     useTraceStore.getState().toggleChangeType('forest', 'cover');
     useTraceStore.getState().toggleChangeType('forest', 'loss');
 
-    expect(ids(useTraceStore.getState().loadingDomains)).toEqual(['water']);
+    expect(ids(useTraceStore.getState().loadingKinds.keys())).toEqual(['water']);
   });
 
   it('drops a readout describing a state that is no longer drawn', () => {
