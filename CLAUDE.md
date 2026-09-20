@@ -76,7 +76,8 @@ a cohort with no layer gets no style layer. Still one tileset per domain; still 
 attribute.
 
 The web reads that one archive through **one MapLibre source per kind** — `trace-forest-cover`,
-then `trace-forest-change` once cover has drawn (`sourceId` / `stageFor` in `layerSpec.ts`). A
+then `trace-forest-change` once every domain's cover has drawn (`sourceId` / `stageFor` in
+`layerSpec.ts`). A
 source is parsed whole, and cover is three quarters of the parse, so this is what puts the ground
 on screen before the changes have been worked out; adding the change layers to the cover source
 later would re-parse cover instead. The `pmtiles://` handler shares each tile's bytes between the

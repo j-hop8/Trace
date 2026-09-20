@@ -186,11 +186,16 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // Add and remove whole domains, once the basemap has had its turn — one kind at a time.
   //
   // A domain goes on in stages, in `kindsOf` order: its cover source and layers first, and its
-  // change source only once the cover source reports loaded. Cover is three quarters of the parse
+  // change source only once cover reports loaded. Cover is three quarters of the parse
   // (`sourceId` in layerSpec has the numbers), so this is what puts the ground on screen before
-  // the changes have been worked out, instead of nothing until both have. The wait is on the
-  // domain's own previous source, not on every domain: the worker pool parses tiles in the order
-  // they arrive, so holding one domain's change back for another's cover would gain nothing.
+  // the changes have been worked out, instead of nothing until both have.
+  //
+  // The gate is on *every* active domain's cover, not the domain's own: a stage goes on only once
+  // every stage before it, on every active domain, is loaded. With its bytes already shared, a
+  // change source's tiles are cache hits and go to the workers at once — so one domain's change
+  // parse would otherwise run alongside the other domain's cover tiles still coming in, and the
+  // ground of the second domain would arrive later for it. Nothing of change is fetched or
+  // parsed until all of cover is on screen.
   useEffect(() => {
     if (!map || !manifest) return;
     // Only ever gates the first add: once true this stays true, so later toggles are immediate.
@@ -229,6 +234,20 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       staged.current.delete(entry.id);
     };
 
+    /** Whether every stage before `index`, of every active domain, is on the map and loaded. */
+    const ready = (index: number) => {
+      for (const entry of manifest.domains) {
+        if (!activeDomains.has(entry.id)) continue;
+        for (const kind of kindsOf(entry).slice(0, index)) {
+          const id = sourceId(entry.id, kind);
+          // `getSource` first: `isSourceLoaded` raises an error event for a source the map does
+          // not have, and a stage not yet added is a stage not yet loaded.
+          if (!map.getSource(id) || !map.isSourceLoaded(id)) return false;
+        }
+      }
+      return true;
+    };
+
     const settle = () => {
       let added = false;
 
@@ -242,13 +261,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
         }
         const next = kinds[have];
         if (next === undefined) continue;
-        // `getSource` first: `isSourceLoaded` raises an error event for a source the map does
-        // not have, and a source removed underneath a stale count must not advance anything.
-        const previous = have > 0 ? kinds[have - 1] : undefined;
-        if (previous !== undefined) {
-          const id = sourceId(entry.id, previous);
-          if (!map.getSource(id) || !map.isSourceLoaded(id)) continue;
-        }
+        if (!ready(have)) continue;
 
         addStage(entry, next);
         staged.current.set(entry.id, have + 1);
