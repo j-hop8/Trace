@@ -29,7 +29,11 @@ so an 8-core machine waits exactly as long as this one.
 2. Each domain becomes **one source per kind** on the same archive — `trace-forest-cover`,
    `trace-forest-change` — added in stages: every domain's cover source with its layers first,
    and the change sources only once *every* active domain's cover reports loaded, so nothing of
-   change is fetched or parsed while any cover is still coming in. Not one source with the change layers added
+   change is fetched or parsed while any cover is still coming in. The gate is by *kind*
+   (`stageReady`): a kind goes on once every kind before it in `KIND_ORDER` is loaded on every
+   active domain that holds one — so a domain with no cover of its own still waits for the
+   others' cover, which gating by a stage's position within its own domain got wrong (review
+   round 1). Not one source with the change layers added
    later: MapLibre has no incremental parse, so `addLayer` (or a visibility flip) on a live
    source re-runs every visible layer over every loaded tile, which re-parses cover — the
    expensive ¾ — a second time and pushes completion from ~17 s to ~28 s. A second source
@@ -54,6 +58,14 @@ layer, so each domain stays contiguous and change stays on top of cover.
   the flat union for the tests.
 - `web/src/domains/manifest.ts`: `kindsOf(entry)` — the kinds a domain holds, in order; the one
   list the stages and the badges both walk.
+- `web/src/types/feature.ts`: `KIND_ORDER`, the order kinds are drawn, listed and loaded in —
+  the constant `kindsOf` and the stages are ordered by. It belongs beside `KIND_OF` and
+  `CHANGE_TYPE_ORDER`, which is why it is here rather than in `manifest.ts`.
+- `web/src/domains/layerSpec.ts` also gains `stageReady(kind, active, loaded)`: the gate a stage
+  waits at, pure so the mixed case (a domain with no cover next to one with) can be tested.
+- This ticket file, and `.agents/tickets/T-035-hmr-removed-map.md`: a pending ticket for a
+  dev-only crash found while measuring, written rather than fixed here per the workflow's
+  out-of-scope rule. Ticket files are part of every ticket's PR.
 - `web/src/map/useDomainLayers.ts`: staged add, per-source `everLoaded`, per-kind loading report,
   teardown of every stage.
 - `web/src/store/useTraceStore.ts`: `loadingDomains` → `loadingKinds`.

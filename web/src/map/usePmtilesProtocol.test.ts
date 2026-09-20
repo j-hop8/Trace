@@ -160,6 +160,28 @@ describe('sharedTiles', () => {
     expect(calls.map((c) => c.url)).toEqual(['a/1', 'a/2', 'a/3', 'a/1']);
   });
 
+  it('lets a burst past its capacity go once the fetches settle', async () => {
+    // All three are pending when the third is added, so nothing can go at that moment; the bound
+    // has to be enforced as they settle, or every completed buffer stays held until some later
+    // request happens to come in.
+    const { load, calls, answer } = fakeLoad();
+    const shared = sharedTiles(load, 2, 2);
+
+    const requests = ['a/1', 'a/2', 'a/3'].map((url) => shared(tile(url), new AbortController()));
+    for (const url of ['a/1', 'a/2', 'a/3']) answer(url);
+    await Promise.all(requests);
+
+    // The oldest settled entry went; the two newest are still held for their second reader.
+    await shared(tile('a/3'), new AbortController());
+    await shared(tile('a/2'), new AbortController());
+    expect(calls.map((c) => c.url)).toEqual(['a/1', 'a/2', 'a/3']);
+
+    const again = shared(tile('a/1'), new AbortController());
+    answer('a/1');
+    await again;
+    expect(calls.map((c) => c.url)).toEqual(['a/1', 'a/2', 'a/3', 'a/1']);
+  });
+
   it('passes anything but tile bytes straight through', async () => {
     const load = vi.fn<ProtocolAction>().mockResolvedValue({ data: { tiles: [] } });
     const shared = sharedTiles(load, 2);
