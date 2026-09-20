@@ -88,8 +88,33 @@ const regimes: Regime[] = (manifest?.domains ?? []).flatMap((entry) => {
  * In the island regime there is no id, because a feature there is a whole group pooled, and the
  * group *is* its attributes: every copy of it -- one per node layer canonical for its validity --
  * carries the same ones, so the attributes scoped to the tile are the identity.
+ *
+ * Only what the tile draws is decoded. Tippecanoe writes a feature into every tile whose
+ * *buffer* it touches, so a feature a few metres over the edge is in the neighbour's data as a
+ * sliver in the band the neighbour never renders. Those slivers are now pooled, and pooled per
+ * layer: one node layer keeps a dust square where another lets the sliver go, and a tile-scoped
+ * identity would read that as a copy missing from a layer. `verify` in the pipeline counts every
+ * copy across the whole archive, so nothing is lost; here, a feature whose bounding box lies
+ * wholly outside the tile's own extent is left out, as the renderer leaves it out.
  */
 type Feature = { layer: string; key: string; properties: Record<string, unknown> };
+
+/** Whether any of the feature's geometry falls inside the tile's own extent, buffer excluded. */
+const drawn = (feature: { extent: number; loadGeometry(): { x: number; y: number }[][] }) => {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const ring of feature.loadGeometry()) {
+    for (const { x, y } of ring) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  return maxX >= 0 && minX <= feature.extent && maxY >= 0 && minY <= feature.extent;
+};
 
 const identity = (regime: Regime['regime'], feature: { id?: unknown; properties: object }) => {
   if (regime === 'detail') {
@@ -132,6 +157,7 @@ async function decode({ entry: domain, regime, zoom: z }: Regime): Promise<Featu
       for (const [name, layer] of Object.entries(layers)) {
         for (let i = 0; i < layer.length; i += 1) {
           const feature = layer.feature(i);
+          if (!drawn(feature)) continue;
           features.push({
             layer: name,
             key: `${x}/${y}#${identity(regime, feature)}`,
@@ -277,7 +303,14 @@ describe.each(regimes)(
         // does not claim them. Compared by identity, because the filter reads attributes and every
         // copy of a feature carries the same ones: a node's filter selects all of a feature's
         // copies, and the claim is that one of them is in the node's layer.
+        //
+        // The island regime keeps only half of that claim. Its copies are pooled per layer, so a
+        // group with a square left in one node layer can have pooled to nothing in another, and
+        // a filter then selects a key its own layer no longer holds. What it must still never do
+        // is hold a feature its filter does not select: that would be a feature drawn under the
+        // wrong years. So `extra` is a detail-regime promise and `missing` is every regime's.
         const layers = layersFor(entry, entry.temporal.end, new Set(entry.changeTypes ?? []));
+        const exact = regime.regime === 'detail';
         const byLayer = new Map<string, Set<string>>();
         for (const f of features) {
           if (!byLayer.has(f.layer)) byLayer.set(f.layer, new Set());
@@ -298,7 +331,11 @@ describe.each(regimes)(
 
           const extra = [...selected].filter((k) => !members.has(k)).length;
           const missing = [...members].filter((k) => !selected.has(k)).length;
-          expect({ sourceLayer, extra, missing }).toEqual({ sourceLayer, extra: 0, missing: 0 });
+          expect({ sourceLayer, extra: exact ? extra : 0, missing }).toEqual({
+            sourceLayer,
+            extra: 0,
+            missing: 0,
+          });
         }
       },
       240_000,
@@ -314,6 +351,7 @@ describe.each(regimes)(
         // a year it is not.
         const years: number[] = [];
         for (let y = entry.temporal.start; y <= entry.temporal.end; y += 1) years.push(y);
+        const exact = regime.regime === 'detail';
 
         const byLayer = new Map<string, Feature[]>();
         for (const f of features) {
@@ -363,9 +401,17 @@ describe.each(regimes)(
             }
 
             expect({ year, role, twice: twice.length }).toEqual({ year, role, twice: 0 });
+            // Nothing drawn in a year it is not valid, in either regime; and nothing valid left
+            // undrawn in the detail regime. The island regime may have pooled a group's copy for
+            // this year to nothing while keeping another of its copies -- see the filter check.
             const extra = [...shown].filter((k) => !expected.has(k)).length;
             const missing = [...expected].filter((k) => !shown.has(k)).length;
-            expect({ year, role, extra, missing }).toEqual({ year, role, extra: 0, missing: 0 });
+            expect({ year, role, extra, missing: exact ? missing : 0 }).toEqual({
+              year,
+              role,
+              extra: 0,
+              missing: 0,
+            });
           }
         }
       },
