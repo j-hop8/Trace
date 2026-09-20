@@ -85,11 +85,15 @@ stays a detail-regime promise. `verify`'s whole-archive count is what proves no 
 **Files in scope:**
 - `pipeline/trace_pipeline/config.py`, `tiles.py`, `domains/base.py` (`manifest_entry`: the
   `detailZoom` field and the caveat sentence).
-- `pipeline/tests/test_tiles.py`, `test_config.py`, and whichever test builds a manifest entry.
+- `pipeline/tests/test_tiles.py`, `test_config.py`, `test_domains.py` and `test_water.py` (the
+  two that build a manifest entry), and `pipeline/tests/fixtures/tippecanoe-decode-z7.txt` — the
+  canned `tippecanoe-decode` output the streaming parser is tested against, a file because its
+  lines are as long as the real ones.
 - `web/src/domains/manifest.ts`, `types/feature.ts`, `components/FeatureReadout.tsx`,
-  `domains/layerSpec.tiles.test.ts`, `domains/manifest.test.ts`, `store/useTraceStore.test.ts`
-  (fixture version).
+  `domains/layerSpec.tiles.test.ts`, and the fixtures in `domains/manifest.test.ts`,
+  `domains/layerSpec.test.ts` and `store/useTraceStore.test.ts` (`detailZoom`, version 3).
 - `CLAUDE.md`: rule 2, one paragraph on the two regimes.
+- This ticket file: measurements and findings are recorded in it as the work goes.
 
 **Do NOT touch:** `extract.py`, `domains/forest.py`, `domains/water.py` — the GeoJSON is not
 re-extracted; `schema/**` — the tile-only `pooled` marker never appears in the GeoJSON;
