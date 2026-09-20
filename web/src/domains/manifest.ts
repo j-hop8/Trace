@@ -63,6 +63,16 @@ export interface DomainManifestEntry {
      * opening view. One tile layer per cohort makes each filter a pass over its own cohort.
      */
     sourceLayers: string[];
+    /**
+     * The zoom from which every feature is its own tile feature, with its id and its metric.
+     *
+     * Below it the tiles are the island view: one feature per cohort and attribute group per
+     * tile, with patches smaller than a screen pixel pooled into squares of the same total area
+     * (`pipeline/trace_pipeline/tiles.py`). Such a feature carries `pooled` and no metric, and
+     * the readout says so rather than quoting a number for a mark that stands for several
+     * patches. Set by the pipeline and read from here, never assumed: it is the tiles' contract.
+     */
+    detailZoom: number;
   };
 }
 
@@ -74,9 +84,10 @@ export interface DomainManifest {
 /**
  * The manifest version this build understands. A bump means the tile contract changed.
  *
+ * 3: two regimes split at `tiles.detailZoom` -- pooled below it, exact from it up.
  * 2: one tile layer per cohort (`tiles.sourceLayers`) rather than one named for the domain.
  */
-const SUPPORTED_VERSION = 2;
+const SUPPORTED_VERSION = 3;
 
 /** What to tell someone whose manifest is missing. The fix is almost always the first line. */
 const MISSING_MANIFEST_HINT =

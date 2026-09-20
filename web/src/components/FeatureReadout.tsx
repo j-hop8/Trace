@@ -39,8 +39,13 @@ function areaIsMeaningful(props: TraceFeatureProperties): boolean {
  * by the years it was there and — if it ended — the year it was gone. A change feature is a
  * verdict that applies from its year and for every year after, so it is described by that one
  * year; it never has an end to describe.
+ *
+ * And one thing that is not a feature at all: below the tiles' detail zoom a mark stands for a
+ * cohort's patches pooled together (`pooled`), so the sentence names the cohort in the plural
+ * and quotes no size — a number here would read as the size of the mark under the cursor, and
+ * it would be the size of nothing.
  */
-function sentence(props: TraceFeatureProperties, area: string | null): string {
+function sentence(props: TraceFeatureProperties, area: string | null, detailZoom?: number): string {
   const from = props.valid_from;
   const to = props.valid_to;
 
@@ -58,9 +63,15 @@ function sentence(props: TraceFeatureProperties, area: string | null): string {
           : `there throughout, from ${from}`;
 
   const subject = props.subtype ?? props.domain;
+  if (props.pooled) {
+    const from = detailZoom === undefined ? 'zoom in' : `zoom in past ${detailZoom}`;
+    return `${capitalise(subject)}, ${when} — several patches pooled at this zoom; ${from} to see them one by one.`;
+  }
   const quotable = area && areaIsMeaningful(props) ? area : null;
   return quotable ? `This ${subject}: ${when}, ${quotable}.` : `This ${subject}: ${when}.`;
 }
+
+const capitalise = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
 export default function FeatureReadout() {
   const selected = useTraceStore((s) => s.selected);
@@ -76,7 +87,9 @@ export default function FeatureReadout() {
   return (
     <div className="pointer-events-auto w-80 rounded-xl border border-ink-700/80 bg-ink-900/90 p-4 text-sm backdrop-blur">
       <div className="flex items-start justify-between gap-3">
-        <p className="leading-relaxed text-slate-100">{sentence(props, area)}</p>
+        <p className="leading-relaxed text-slate-100">
+          {sentence(props, area, entry?.tiles.detailZoom)}
+        </p>
         <button
           type="button"
           onClick={() => select(null)}
@@ -89,7 +102,7 @@ export default function FeatureReadout() {
 
       {/* Say why the number is missing. An absent area otherwise looks like data that failed to
           load, and the reader has no way to tell that from a number deliberately withheld. */}
-      {area && !areaIsMeaningful(props) && (
+      {area && !areaIsMeaningful(props) && !props.pooled && (
         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
           No area given: cover shapes are cut by the extraction grid and at year boundaries, so one
           shape&rsquo;s size is partly an artefact of where those cuts fell.

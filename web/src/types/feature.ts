@@ -75,6 +75,17 @@ export interface TraceFeatureProperties {
   method: string;
   /** 0–1, surfaced in the UI rather than hidden. */
   confidence: number;
+
+  /**
+   * Present, and true, on a tile feature below the manifest's `tiles.detailZoom`: this is a
+   * cohort's shapes pooled for one tile, not one patch, and it carries no `metric`.
+   *
+   * A tile-only marker. It is never in the GeoJSON and so never in the schema -- the pipeline
+   * writes it on the island copies it hands tippecanoe (`tiles.py`), which is why `metric` is
+   * declared required above and yet absent here: the readout reads through `readMetric`, which
+   * tolerates that, and quotes nothing for a pooled feature.
+   */
+  pooled?: true;
 }
 
 /** A GeoJSON Feature carrying Trace properties. Also the shape of a decoded vector-tile feature. */

@@ -75,6 +75,16 @@ lists the tile layers the archive holds (`tiles.sourceLayers`, measured like `ch
 a cohort with no layer gets no style layer. Still one tileset per domain; still time as a feature
 attribute.
 
+The archive has **two regimes, split at `tiles.detailZoom`** (`config.DETAIL_ZOOM`, 11). From
+there up a tile holds every feature with its id and its metric, nothing dropped, and `verify`
+proves it by decoding the tiles and counting. Below it — the island view — a tile holds one
+feature per cohort layer and attribute group, marked `pooled` with no metric, and patches under a
+screen pixel are pooled into squares of the same total area (tippecanoe's tiny-polygon reduction,
+`--tiny-polygon-size`), with the retained area measured per zoom at build time. A z7 tile went
+from ~100k features to ~50. The split is where a `MIN_PATCH_PIXELS` patch is provably above the
+pooling threshold (`tiles.detail_floor_units2`); the caveat states the pooling; the readout quotes
+no area for a pooled feature.
+
 The web reads that one archive through **one MapLibre source per kind** — `trace-forest-cover`,
 then `trace-forest-change` once every domain's cover has drawn (`sourceId` / `stageFor` in
 `layerSpec.ts`). A
