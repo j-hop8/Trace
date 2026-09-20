@@ -19,7 +19,7 @@ import type {
 import { styleFor } from '@/domains/colors';
 import { kindsOf } from '@/domains/manifest';
 import type { DomainManifestEntry } from '@/domains/manifest';
-import { CHANGE_TYPE_ORDER, KIND_OF } from '@/types/feature';
+import { CHANGE_TYPE_ORDER, KIND_OF, KIND_ORDER } from '@/types/feature';
 import type { ChangeType, Kind } from '@/types/feature';
 
 /** Image id for the diagonal hatch registered on the map. */
@@ -716,6 +716,32 @@ export function stagesFor(
   selected: ReadonlySet<ChangeType>,
 ): DomainStage[] {
   return kindsOf(entry).map((kind) => stageFor(entry, kind, year, selected));
+}
+
+/**
+ * Whether a stage of this kind may go on the map, given what is loaded.
+ *
+ * The rule the map stages by: a kind goes on only once every kind *before it* in `KIND_ORDER`
+ * is loaded on every active domain that holds one. So no change is fetched or parsed while any
+ * cover is still coming in — cover being three quarters of the parse — and a domain with no
+ * cover of its own still waits for everyone else's before its change goes on. Gating by the
+ * stage's *position* within its own domain got that last case wrong: a change-only domain's
+ * first stage had nothing of its own to wait for.
+ *
+ * `loaded(entry, kind)` answers whether that domain's source for that kind is on the map and
+ * has finished loading. Pure, so it can be tested against a mixed set of domains without a map.
+ */
+export function stageReady(
+  kind: Kind,
+  active: readonly DomainManifestEntry[],
+  loaded: (entry: DomainManifestEntry, kind: Kind) => boolean,
+): boolean {
+  const rank = KIND_ORDER.indexOf(kind);
+  return active.every((entry) =>
+    kindsOf(entry).every(
+      (earlier) => KIND_ORDER.indexOf(earlier) >= rank || loaded(entry, earlier),
+    ),
+  );
 }
 
 /**

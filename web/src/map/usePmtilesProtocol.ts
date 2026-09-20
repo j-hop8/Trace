@@ -76,6 +76,9 @@ const SHARED_TILE_CAPACITY = 32;
  * `readers` requesters — one per kind, since that is how many sources an archive can have. An
  * entry is dropped when its last reader has taken it; entries a lone source reads once, like the
  * basemap's, are let go oldest-first past `SHARED_TILE_CAPACITY`, which bounds what this holds.
+ * The bound is enforced whenever an entry is added *or settles*: a burst of requests past the
+ * capacity is all pending when the last of them is added, and pending entries are never let go
+ * (a fetch in flight has a waiter), so it is the settling that must prune them.
  *
  * Two things make this more than a map of promises. MapLibre *transfers* the buffer it is handed
  * to the worker, which detaches it on this side, so the entry keeps a copy and every reader but
@@ -99,6 +102,16 @@ export function sharedTiles(
     if (tiles.get(url) === tile) tiles.delete(url);
   };
 
+  /** Let settled entries go, oldest first, until the capacity holds. Never a pending one. */
+  const prune = () => {
+    if (tiles.size <= capacity) return;
+    for (const [url, tile] of tiles) {
+      if (tile.pending) continue;
+      tiles.delete(url);
+      if (tiles.size <= capacity) return;
+    }
+  };
+
   return async (params, abortController) => {
     if (params.type !== 'arrayBuffer' || readers < 2) return load(params, abortController);
 
@@ -113,6 +126,9 @@ export function sharedTiles(
         pending: true,
         promise: load(params, controller).then((response) => {
           shared.pending = false;
+          // Settling is what makes an entry eligible to go; a burst past the capacity was all
+          // pending when it was added.
+          prune();
           return { ...response, data: copy(response.data as Bytes) };
         }),
       };
@@ -120,12 +136,8 @@ export function sharedTiles(
       shared.promise.catch(() => forget(url, shared));
       tile = shared;
       tiles.set(url, tile);
-      // Oldest first. A Map iterates in insertion order, and nothing here re-inserts.
-      for (const [oldUrl, old] of tiles) {
-        if (tiles.size <= capacity) break;
-        if (old.pending) continue;
-        tiles.delete(oldUrl);
-      }
+      // Oldest first: a Map iterates in insertion order, and nothing here re-inserts.
+      prune();
     }
 
     tile.waiting += 1;

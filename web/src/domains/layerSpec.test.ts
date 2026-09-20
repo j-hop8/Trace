@@ -31,10 +31,11 @@ import {
   sourceId,
   sourceIdsFor,
   sourceLayerFor,
+  stageReady,
   stagesFor,
 } from '@/domains/layerSpec';
 import type { DomainManifestEntry } from '@/domains/manifest';
-import type { ChangeType } from '@/types/feature';
+import type { ChangeType, Kind } from '@/types/feature';
 
 /**
  * A stand-in manifest entry rather than the real one: `data/domains.json` is generated and
@@ -425,6 +426,42 @@ describe('stages', () => {
     const stages = stagesFor(changeOnly, 2013, all(changeOnly));
     expect(stages.map((s) => s.kind)).toEqual(['change']);
     expect(sourceIdsFor(changeOnly)).toEqual([sourceId(changeOnly.id, 'change')]);
+  });
+});
+
+/**
+ * The gate a stage waits at: nothing of a kind goes on until every earlier kind is loaded on
+ * every active domain. The case that matters is the mixed one — a domain with no cover of its
+ * own next to one that has — because gating by a stage's position *within its own domain* let
+ * the cover-less domain's change through while the other's cover was still parsing.
+ */
+describe('stageReady', () => {
+  /** `loaded` as a set of `domain/kind` strings, so a test can say exactly what is on the map. */
+  const loadedFrom = (...done: string[]) => {
+    const set = new Set(done);
+    return (e: DomainManifestEntry, kind: Kind) => set.has(`${e.id}/${kind}`);
+  };
+
+  it('lets cover go on at once, whatever else is loading', () => {
+    expect(stageReady('cover', [entry, water], loadedFrom())).toBe(true);
+  });
+
+  it('holds change back until every active domain’s cover is loaded', () => {
+    expect(stageReady('change', [entry, water], loadedFrom('forest/cover'))).toBe(false);
+    expect(stageReady('change', [entry, water], loadedFrom('forest/cover', 'water/cover'))).toBe(
+      true,
+    );
+  });
+
+  it('holds a change-only domain’s change back for the other domains’ cover', () => {
+    // The regression: `changeOnly` has no cover stage of its own to wait for, and its change must
+    // still not be parsed alongside forest's cover.
+    expect(stageReady('change', [entry, changeOnly], loadedFrom())).toBe(false);
+    expect(stageReady('change', [entry, changeOnly], loadedFrom('forest/cover'))).toBe(true);
+  });
+
+  it('asks nothing of a domain that is not active', () => {
+    expect(stageReady('change', [changeOnly], loadedFrom())).toBe(true);
   });
 });
 
