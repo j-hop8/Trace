@@ -38,7 +38,8 @@ const SCALE_SPLIT_ZOOM = 11;
  * The map source one kind of a domain is read through: `trace-forest-cover`, `trace-forest-change`.
  *
  * One *archive* per domain, still — both sources name the same `tiles.url` — but one MapLibre
- * source per kind, because that is what lets the kinds arrive one after the other. A source is
+ * source per kind, because that is what lets the kinds arrive one after the other: every
+ * domain's cover first, and only then any domain's change. A source is
  * parsed whole: adding a layer to it, or showing a hidden one, re-runs every visible layer over
  * every loaded tile, and cover is three quarters of that work. Two sources on the same archive
  * parse only their own layers, so the change source going on costs the change layers and nothing
@@ -647,9 +648,9 @@ export function opacityUpdatesFor(
  * One kind of a domain, ready to go on the map: its source and the layers that read it.
  *
  * `stagesFor` returns these in `kindsOf` order, and the map adds them in that order — the next
- * only once the previous source reports loaded — so cover is on screen while change is still
- * being parsed. Which kind a role belongs to follows from its change type (`KIND_OF`), the same
- * rule that picks its cohort model and its toggle group.
+ * only once the previous one is loaded on every active domain — so all of cover is on screen
+ * before any change is fetched or parsed. Which kind a role belongs to follows from its change
+ * type (`KIND_OF`), the same rule that picks its cohort model and its toggle group.
  */
 export interface DomainStage {
   kind: Kind;

@@ -27,8 +27,9 @@ so an 8-core machine waits exactly as long as this one.
 1. `maplibregl.setWorkerCount(n)` before the map is constructed. Tiles are dispatched round-robin
    over the pool, so the ~12 tiles a domain needs at the opening view parse in parallel.
 2. Each domain becomes **one source per kind** on the same archive — `trace-forest-cover`,
-   `trace-forest-change` — added in stages: the cover source with its layers first, the change
-   source once the cover source reports loaded. Not one source with the change layers added
+   `trace-forest-change` — added in stages: every domain's cover source with its layers first,
+   and the change sources only once *every* active domain's cover reports loaded, so nothing of
+   change is fetched or parsed while any cover is still coming in. Not one source with the change layers added
    later: MapLibre has no incremental parse, so `addLayer` (or a visibility flip) on a live
    source re-runs every visible layer over every loaded tile, which re-parses cover — the
    expensive ¾ — a second time and pushes completion from ~17 s to ~28 s. A second source
@@ -77,7 +78,9 @@ cover sources go on, since when the render loop starts depends on the pane being
 | water cover complete | 17.2 s | 12.1 s | 11.7 s |
 | everything, `idle` | 18.8 s | 14.8 s | 17.1 s |
 
-Each change stage parses in 2.3–2.7 s once its cover is up. Zero range requests to either archive
+With the gate on every domain's cover (opening view, pane visible from the start): cover sources on
+at 2.1 s, forest cover loaded at 13.3 s, water at 16.9 s, both change sources on at 17.2 s and
+loaded by 20.8 s, idle 21.0 s. Each change stage parses in 2.3–3.5 s. Zero range requests to either archive
 after the change sources go on — the second source is served from the shared bytes. The badge
 sequence in the DOM: both pills `載入中` → pills clear and both `變化` headings badge as cover
 lands → each heading clears as its change source loads.
