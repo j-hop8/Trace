@@ -25,6 +25,27 @@ const BASEMAP_SOURCE = Object.keys((baseStyle as { sources: Record<string, unkno
 /** Taiwan, framed to fill the viewport on first paint. */
 const TAIWAN_BOUNDS: [number, number, number, number] = [119.3, 21.85, 122.05, 25.35];
 
+/**
+ * How many workers parse tiles.
+ *
+ * MapLibre's default is **one**, whatever the machine (`worker_pool.ts`; Safari alone gets up to
+ * three), and for a basemap that is plenty. Trace is not a basemap: at the opening view each
+ * domain's ~12 tiles hold ~1 M sub-pixel patches, and parsing them was the whole of the ~19 s
+ * wait after T-033 — with every other core idle. Tiles are dispatched round-robin over the pool,
+ * so more workers parse the opening view's tiles side by side.
+ *
+ * Half the logical cores, which is what mapbox-gl always used: parse is CPU-bound and
+ * allocation-heavy, and the main thread and the compositor need the rest. A floor of two because
+ * the second worker is the point — on a saturated 2-core machine it measured no worse than one,
+ * and there was no idle core for it to gain from. A cap because past the number of tiles in view
+ * another worker is only another copy of the style. `hardwareConcurrency` is absent in some
+ * browsers, in which case MapLibre's own guess of four applies. Set before any map is built: the
+ * pool is sized once, on first use.
+ */
+const CORES = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+const WORKER_COUNT = Math.max(2, Math.min(Math.floor(CORES / 2), 8));
+maplibregl.setWorkerCount(WORKER_COUNT);
+
 interface MapCanvasProps {
   /** Called once the style has loaded, so callers can add data layers safely. */
   onReady?: (map: maplibregl.Map) => void;
