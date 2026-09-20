@@ -83,7 +83,7 @@ describe('loadingKinds', () => {
     // Not a guess: the layers are held back until the basemap has painted, so at this instant they
     // really are all switched on and showing nothing — and each kind will arrive on its own.
     useTraceStore.getState().setManifest({
-      version: 2,
+      version: 3,
       domains: [
         { id: 'forest', changeTypes: ['cover', 'loss'], temporal: { start: 2001, end: 2025 } },
         { id: 'water', changeTypes: ['gain', 'loss'], temporal: { start: 1984, end: 2024 } },
@@ -112,7 +112,7 @@ describe('loadingKinds', () => {
  * off rather than to a lit toggle over an empty map.
  */
 const manifest = {
-  version: 1,
+  version: 3,
   domains: [
     {
       id: 'forest',

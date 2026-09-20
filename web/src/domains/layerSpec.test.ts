@@ -59,7 +59,7 @@ const entry: DomainManifestEntry = {
     licence: 'CC-BY-4.0',
   },
   caveat: 'Tree-cover loss, not deforestation.',
-  tiles: { url: 'pmtiles:///data/forest.pmtiles', sourceLayers: [] },
+  tiles: { url: 'pmtiles:///data/forest.pmtiles', sourceLayers: [], detailZoom: 11 },
 };
 entry.tiles.sourceLayers = cohortSourceLayers(entry);
 
@@ -81,7 +81,7 @@ const water: DomainManifestEntry = {
     licence: 'Free to use with attribution',
   },
   caveat: 'Surface water at 30 m resolution.',
-  tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayers: [] },
+  tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayers: [], detailZoom: 11 },
 };
 water.tiles.sourceLayers = cohortSourceLayers(water);
 
