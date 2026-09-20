@@ -152,3 +152,22 @@ def test_land_boundary_is_configured_with_the_filter_it_needs():
     assert config.TAIWAN_LAND_BOUNDARY
     assert config.TAIWAN_LAND_BOUNDARY_FIELD
     assert config.TAIWAN_LAND_BOUNDARY_VALUE == "Taiwan"
+
+
+# --- the two tile regimes (T-036) ---------------------------------------------------------------
+
+
+def test_detail_zoom_is_inside_the_tileset():
+    from trace_pipeline import tiles
+
+    assert tiles.MIN_ZOOM < config.DETAIL_ZOOM <= tiles.MAX_ZOOM
+
+
+def test_pooling_size_stays_where_tippecanoe_says_it_is_artefact_free():
+    """Its docs put visible artefacts above 6 or so; the default, 2, pools nothing above z7."""
+    assert 2 <= config.TINY_POLYGON_SIZE <= 6
+
+
+def test_manifest_version_names_the_two_regimes():
+    """The web refuses any other version, and reads `tiles.detailZoom` only from this one on."""
+    assert config.MANIFEST_VERSION == 3
