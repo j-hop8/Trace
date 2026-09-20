@@ -75,6 +75,14 @@ lists the tile layers the archive holds (`tiles.sourceLayers`, measured like `ch
 a cohort with no layer gets no style layer. Still one tileset per domain; still time as a feature
 attribute.
 
+The web reads that one archive through **one MapLibre source per kind** — `trace-forest-cover`,
+then `trace-forest-change` once cover has drawn (`sourceId` / `stageFor` in `layerSpec.ts`). A
+source is parsed whole, and cover is three quarters of the parse, so this is what puts the ground
+on screen before the changes have been worked out; adding the change layers to the cover source
+later would re-parse cover instead. The `pmtiles://` handler shares each tile's bytes between the
+two (`sharedTiles`), so the archive is still fetched once, and MapLibre is given more than its
+default single worker to parse on (`WORKER_COUNT` in `MapCanvas.tsx`).
+
 Cover used to be drawn by painting loss patches over a never-ending baseline in the ground colour
 to cut holes in it (`cleared-*`). That was the web deriving cover from loss; it is gone.
 

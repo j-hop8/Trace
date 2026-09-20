@@ -216,7 +216,7 @@ describe.each(domains)('cohorts against the built $entry.id tileset', ({ entry, 
       // does not claim them. Compared by identity, because the filter reads attributes and every
       // copy of a feature carries the same ones: a node's filter selects all of a feature's
       // copies, and the claim is that one of them is in the node's layer.
-      const layers = layersFor(entry, entry.temporal.end, new Set(entry.changeTypes ?? [])).layers;
+      const layers = layersFor(entry, entry.temporal.end, new Set(entry.changeTypes ?? []));
       const byLayer = new Map<string, Set<string>>();
       for (const f of features) {
         if (!byLayer.has(f.layer)) byLayer.set(f.layer, new Set());
@@ -265,7 +265,7 @@ describe.each(domains)('cohorts against the built $entry.id tileset', ({ entry, 
 
       for (const year of years) {
         // Everything the domain can show, so cover and every change are covered.
-        const layers = layersFor(entry, year, new Set(entry.changeTypes ?? [])).layers;
+        const layers = layersFor(entry, year, new Set(entry.changeTypes ?? []));
         const roles = new Set(layers.map((l) => roleOf(l.id, entry.id)));
 
         for (const role of roles) {

@@ -28,7 +28,10 @@ import {
   maxWritesPerStep,
   opacityChannel,
   opacityUpdatesFor,
+  sourceId,
+  sourceIdsFor,
   sourceLayerFor,
+  stagesFor,
 } from '@/domains/layerSpec';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import type { ChangeType } from '@/types/feature';
@@ -120,7 +123,7 @@ describe('cohorts', () => {
   });
 
   it('builds one layer per change role per year and per cover role per node, with unique ids', () => {
-    const { layers } = layersFor(entry, 2013, ALL);
+    const layers = layersFor(entry, 2013, ALL);
 
     expect(layers).toHaveLength(LAYERS);
     expect(new Set(layers.map((l) => l.id)).size).toBe(layers.length);
@@ -135,7 +138,7 @@ describe('cohorts', () => {
   it('gives the first cohort everything from its year back, so a pre-range baseline is kept', () => {
     // A change dated before the range — nothing forest emits today, but nothing forbids it — must
     // land in the first cohort rather than in none. An `==` test would drop it.
-    const { layers } = layersFor(entry, 2013, ALL);
+    const layers = layersFor(entry, 2013, ALL);
     const first = layers.find((l) => l.id === `trace-${entry.id}-fill-loss-2001`);
     const later = layers.find((l) => l.id === `trace-${entry.id}-fill-loss-2014`);
 
@@ -180,7 +183,7 @@ describe('interval cohorts', () => {
       { valid_from: 2026, label: 'begins after the range ends' },
     ];
 
-    const { layers } = layersFor(entry, 2013, ALL);
+    const layers = layersFor(entry, 2013, ALL);
     const coverFill = layers.filter((l) => roleOf(l.id) === 'cover-fill');
     expect(coverFill).toHaveLength(NODES);
 
@@ -214,7 +217,7 @@ describe('interval cohorts', () => {
   });
 
   it('reads an absent valid_to as open, which is how tippecanoe encodes null', () => {
-    const { layers } = layersFor(entry, 2013, ALL);
+    const layers = layersFor(entry, 2013, ALL);
     const root = layers.find((l) => l.id === ROOT)!;
     const filter = featureFilter(root.filter as never, root.id).filter;
     const at = (props: Record<string, unknown>) =>
@@ -240,7 +243,7 @@ describe('each cohort reads a tile layer of its own', () => {
   });
 
   it('reads, for every layer, the tile layer of its own cohort and nothing wider', () => {
-    const { layers } = layersFor(entry, 2013, ALL);
+    const layers = layersFor(entry, 2013, ALL);
     const sourceLayerOf = (id: string) =>
       (layers.find((l) => l.id === id) as { 'source-layer': string })['source-layer'];
 
@@ -270,7 +273,7 @@ describe('each cohort reads a tile layer of its own', () => {
       },
     };
 
-    const built = layersFor(sparse, 2013, ALL).layers;
+    const built = layersFor(sparse, 2013, ALL);
     expect(built).toHaveLength(LAYERS - CHANGE_ROLES - COVER_ROLES);
     expect(
       built.some((l) => (l as { 'source-layer': string })['source-layer'] === 'loss:2013'),
@@ -299,13 +302,13 @@ describe('the year is opacity, never a filter', () => {
     const at2010 = layersFor(entry, 2010, ALL);
     const at2020 = layersFor(entry, 2020, ALL);
 
-    const filters = (spec: typeof at2010) => spec.layers.map((l) => [l.id, l.filter]);
+    const filters = (layers: typeof at2010) => layers.map((l) => [l.id, l.filter]);
 
     expect(filters(at2010)).toEqual(filters(at2020));
   });
 
   it('shows the cohorts the year falls in and hides the rest', () => {
-    const { layers } = layersFor(entry, 2010, ALL);
+    const layers = layersFor(entry, 2010, ALL);
 
     for (const layer of layers) {
       expect({ id: layer.id, on: opacityOf(layer) > 0 }).toEqual({
@@ -316,7 +319,7 @@ describe('the year is opacity, never a filter', () => {
   });
 
   it('draws a shown cohort at its role’s own opacity, not a substitute', () => {
-    const { layers } = layersFor(entry, 2025, ALL);
+    const layers = layersFor(entry, 2025, ALL);
     const shown = (id: string) => opacityOf(layers.find((l) => l.id === id)!);
 
     expect(shown(`trace-${entry.id}-fill-loss-2010`)).toBe(0.75);
@@ -328,7 +331,7 @@ describe('the year is opacity, never a filter', () => {
   it('appears instantly, so a year is never shown half-drawn', () => {
     // MapLibre's default 300ms fade would still be running two years later at playback speed,
     // leaving the map mid-transition while the readout named the year outright.
-    const { layers } = layersFor(entry, 2010, ALL);
+    const layers = layersFor(entry, 2010, ALL);
 
     for (const layer of layers) {
       const paint = layer.paint as Record<string, unknown>;
@@ -338,7 +341,7 @@ describe('the year is opacity, never a filter', () => {
   });
 
   it('changes nothing but opacity across cohorts of a role', () => {
-    const { layers } = layersFor(entry, 2013, ALL);
+    const layers = layersFor(entry, 2013, ALL);
     const withoutOpacity = (layer: (typeof layers)[number]) => {
       const paint = { ...(layer.paint as Record<string, unknown>) };
       const { key } = opacityChannel({ type: layer.type, paint });
@@ -358,7 +361,7 @@ describe('draw order', () => {
   it('keeps every cover cohort beneath every change cohort', () => {
     // Cover is the ground the changes happened to. A loss drawn under the canopy it removed would
     // simply not be visible.
-    const ids = layersFor(entry, 2013, ALL).layers.map((l) => l.id);
+    const ids = layersFor(entry, 2013, ALL).map((l) => l.id);
     const lastCover = ids.reduce((last, id, i) => (id.includes('-cover-') ? i : last), -1);
     const firstChange = ids.findIndex((id) => id.includes('-loss-'));
 
@@ -367,13 +370,61 @@ describe('draw order', () => {
   });
 
   it('keeps each role’s cohorts contiguous', () => {
-    const roles = layersFor(entry, 2013, ALL).layers.map((l) => roleOf(l.id));
+    const roles = layersFor(entry, 2013, ALL).map((l) => roleOf(l.id));
     const counts = new Map<string, number>();
     for (const role of roles) counts.set(role, (counts.get(role) ?? 0) + 1);
 
     // A role that reappears after another role has intervened means the order was interleaved.
     expect(counts.size).toBe(ROLES);
     expect(roles).toEqual([...counts].flatMap(([r, n]) => Array<string>(n).fill(r)));
+  });
+});
+
+/**
+ * The stages a domain goes on the map in — one source per kind, cover first.
+ *
+ * Cover is three quarters of the parse, and a source is parsed whole, so cover can only be on
+ * screen before change has been worked out if the two are read through different sources. What
+ * is pinned here is that the split follows the kind and nothing else: every layer of a stage
+ * names that stage's source, the stages come in kind order, and their layers laid end to end are
+ * exactly what `layersFor` builds.
+ */
+describe('stages', () => {
+  it('reads each kind through a source of its own, cover first', () => {
+    const stages = stagesFor(water, 2013, all(water));
+
+    expect(stages.map((s) => s.kind)).toEqual(['cover', 'change']);
+    expect(stages.map((s) => s.sourceId)).toEqual(sourceIdsFor(water));
+    for (const stage of stages) {
+      expect(stage.layers.length).toBeGreaterThan(0);
+      for (const layer of stage.layers) expect(layer.source).toBe(stage.sourceId);
+    }
+  });
+
+  it('names both sources on the same archive', () => {
+    // One archive per domain, still. The bytes are fetched once and shared — see `sharedTiles`.
+    const urls = new Set(stagesFor(entry, 2013, ALL).map((s) => s.source.url));
+    expect(urls).toEqual(new Set([entry.tiles.url]));
+  });
+
+  it('puts every layer of a kind, and no other, in that kind’s stage', () => {
+    const [cover, change] = stagesFor(water, 2013, all(water));
+    expect(cover?.layers.every((l) => l.id.includes('-cover-'))).toBe(true);
+    expect(change?.layers.some((l) => l.id.includes('-cover-'))).toBe(false);
+    expect(change?.layers.length).toBe(
+      layersFor(water, 2013, all(water)).length - (cover?.layers.length ?? 0),
+    );
+  });
+
+  it('lays the stages end to end to give the full draw order', () => {
+    const flat = stagesFor(entry, 2013, ALL).flatMap((s) => s.layers.map((l) => l.id));
+    expect(flat).toEqual(layersFor(entry, 2013, ALL).map((l) => l.id));
+  });
+
+  it('has one stage for a domain with one kind', () => {
+    const stages = stagesFor(changeOnly, 2013, all(changeOnly));
+    expect(stages.map((s) => s.kind)).toEqual(['change']);
+    expect(sourceIdsFor(changeOnly)).toEqual([sourceId(changeOnly.id, 'change')]);
   });
 });
 
@@ -521,7 +572,7 @@ describe('which toggle shows which layer', () => {
   it('is a visibility switch, so the layers are built either way', () => {
     // Both states' layers exist from the start and are switched with `visibility`. Adding and
     // removing them instead would refetch a tile every time a chip was pressed.
-    const { layers } = layersFor(entry, 2013, new Set<ChangeType>(['loss']));
+    const layers = layersFor(entry, 2013, new Set<ChangeType>(['loss']));
     const visibilityOf = (id: string) =>
       (layers.find((l) => l.id === id)?.layout as { visibility?: string } | undefined)?.visibility;
 
@@ -539,7 +590,7 @@ describe('paint never reads a feature', () => {
     // opacity per step — is the same reload in different clothes. A `step` on zoom is still
     // allowed, because zoom is not a feature.
     for (const e of [entry, water]) {
-      for (const layer of layersFor(e, 2013, all(e)).layers) {
+      for (const layer of layersFor(e, 2013, all(e))) {
         expect(JSON.stringify(layer.paint)).not.toContain('"get"');
       }
     }

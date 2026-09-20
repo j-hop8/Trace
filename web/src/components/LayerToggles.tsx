@@ -1,6 +1,6 @@
 import { styleFor } from '@/domains/colors';
 import type { FeatureStyle } from '@/domains/colors';
-import { coversYear, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
+import { coversYear, kindsOf, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import { useTraceStore } from '@/store/useTraceStore';
 import type { ChangeType, Kind } from '@/types/feature';
@@ -111,12 +111,17 @@ function Swatch({ style: featureStyle }: { style: FeatureStyle }) {
  * Drawn only when the tileset holds a state of this kind — a domain with no cover gets no cover
  * row rather than an empty heading. The heading is a button: pressing it is every chip in the row
  * at once, so a reader can drop all of "change" and keep "cover" in one press.
+ *
+ * `loading` is this kind still being parsed while the domain's other kind is already drawn — the
+ * kinds go on the map one after the other, cover first. The heading says so, because a map that
+ * shows the canopy and none of the losses yet looks exactly like a map on which nothing was lost.
  */
 function KindGroup({
   domain,
   kind,
   year,
   selected,
+  loading,
   onToggleType,
   onToggleKind,
 }: {
@@ -124,6 +129,7 @@ function KindGroup({
   kind: Kind;
   year: number;
   selected: ReadonlySet<ChangeType>;
+  loading: boolean;
   onToggleType: (changeType: ChangeType) => void;
   onToggleKind: () => void;
 }) {
@@ -151,6 +157,12 @@ function KindGroup({
         <span aria-hidden>·</span>
         {/* The baseline, in words, on screen. This is the line that says what the colours mean. */}
         <span>{gloss.zh}</span>
+        {/* The same badge as the pill's, one size down: waiting, in slate, never amber. */}
+        {loading && (
+          <span className="animate-pulse rounded bg-ink-800/80 px-1 py-px text-[9px] text-slate-400">
+            載入中
+          </span>
+        )}
       </button>
 
       <div className="flex flex-wrap gap-1">
@@ -206,7 +218,7 @@ function KindGroup({
 export default function LayerToggles() {
   const manifest = useTraceStore((s) => s.manifest);
   const activeDomains = useTraceStore((s) => s.activeDomains);
-  const loadingDomains = useTraceStore((s) => s.loadingDomains);
+  const loadingKinds = useTraceStore((s) => s.loadingKinds);
   // The drawn year, not the requested one, so this badge and the slider's readout never disagree
   // about which year the map is showing.
   const year = useTraceStore((s) => s.renderedYear);
@@ -223,7 +235,11 @@ export default function LayerToggles() {
     <ul className="pointer-events-auto flex flex-col gap-2">
       {manifest.domains.map((domain) => {
         const active = activeDomains.has(domain.id);
-        const loading = loadingDomains.has(domain.id);
+        const kinds = kindsOf(domain);
+        const missing = loadingKinds.get(domain.id);
+        // Nothing of this domain is on screen yet — every kind it holds is still to come. Once
+        // the first kind has drawn, the pill's badge gives way to the kind heading's below.
+        const loading = missing !== undefined && kinds.every((kind) => missing.has(kind));
         const hasData = coversYear(domain, year);
         const selected = selectedTypes.get(domain.id) ?? new Set<ChangeType>();
         // Whatever this domain's tileset actually holds — never a fixed list, never `domain.id`.
@@ -290,6 +306,7 @@ export default function LayerToggles() {
                     kind={kind}
                     year={year}
                     selected={selected}
+                    loading={!loading && missing !== undefined && missing.has(kind)}
                     onToggleType={(changeType) => toggleChangeType(domain.id, changeType)}
                     onToggleKind={() => toggleKind(domain.id, kind)}
                   />
