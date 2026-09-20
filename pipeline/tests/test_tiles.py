@@ -401,6 +401,7 @@ def test_manifest_prefers_the_measured_change_types(tmp_path, monkeypatch):
     from trace_pipeline import manifest, tiles
 
     monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+    write_archive(tmp_path / "forest.pmtiles")
     # The tileset only got loss into it, whatever the domain class declares.
     monkeypatch.setattr(tiles, "change_types_in", lambda archive: ("loss",))
     monkeypatch.setattr(tiles, "source_layers_in", lambda archive: ("loss:2013",))
@@ -445,10 +446,40 @@ def test_manifest_refuses_tiles_built_for_another_range(tmp_path, monkeypatch):
     """A node this range's tree does not have is data the web would never draw."""
     from trace_pipeline import manifest, tiles
 
+    monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+    write_archive(tmp_path / "forest.pmtiles")
     monkeypatch.setattr(tiles, "change_types_in", lambda archive: ("cover", "loss"))
     monkeypatch.setattr(tiles, "source_layers_in", lambda archive: ("cover:2001-2025", "loss:2013"))
 
     with pytest.raises(manifest.ManifestError, match="cover:2001-2025.*different year range"):
+        manifest.build([Fake2001()])
+
+
+def test_manifest_refuses_an_archive_it_cannot_read(tmp_path, monkeypatch):
+    """Present but unreadable is not the pre-tiling case.
+
+    Falling back here would publish an invented layer list over real tiles and then validate the
+    invention -- the manifest passing on a machine without `pmtiles` while describing nothing.
+    """
+    from trace_pipeline import manifest, tiles
+
+    monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+    write_archive(tmp_path / "forest.pmtiles")
+    monkeypatch.setattr(tiles, "source_layers_in", lambda archive: None)
+
+    with pytest.raises(manifest.ManifestError, match="cannot be read"):
+        manifest.build([Fake2001()])
+
+
+def test_manifest_refuses_an_archive_from_before_cohort_layers(tmp_path, monkeypatch):
+    from trace_pipeline import manifest, tiles
+
+    monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+    write_archive(tmp_path / "forest.pmtiles")
+    monkeypatch.setattr(tiles, "source_layers_in", lambda archive: ("forest",))
+    monkeypatch.setattr(tiles, "change_types_in", lambda archive: None)
+
+    with pytest.raises(manifest.ManifestError, match="before cohort layers"):
         manifest.build([Fake2001()])
 
 

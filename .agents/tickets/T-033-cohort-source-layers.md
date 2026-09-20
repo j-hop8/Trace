@@ -54,7 +54,9 @@ for every style layer, its filter over the whole tile selects exactly its source
   count across layers and that every layer name parses; `change_types_in` reads the layer names.
 - `pipeline/trace_pipeline/manifest.py`: `tiles.sourceLayers` measured from the archive's
   `vector_layers`; `_check` refuses a layer that is not a node of the tree over `temporal` (tiles
-  built for a different range); `MANIFEST_VERSION` → 2.
+  built for a different range). The fallback to declared intent applies only when there is no
+  archive; one that is present but unreadable, or from before cohort layers, is refused.
+- `pipeline/trace_pipeline/config.py`: `MANIFEST_VERSION` → 2.
 - `pipeline/trace_pipeline/cli.py`: a `manifest` subcommand, so tiles can be rebuilt and the
   manifest rewritten without re-extracting. `all` calls it.
 - `pipeline/trace_pipeline/domains/base.py`: `manifest_entry` takes the source-layer list.

@@ -45,46 +45,51 @@ def build(domains: Sequence[Domain]) -> dict[str, Any]:
     """
     entries = []
     for domain in domains:
-        change_types = _change_types_for(domain)
-        entries.append(
-            domain.manifest_entry(
-                tiles_url(domain.id), change_types, _source_layers_for(domain, change_types)
-            )
-        )
+        change_types, source_layers = _measured(domain)
+        entries.append(domain.manifest_entry(tiles_url(domain.id), change_types, source_layers))
     _check(entries)
     return {"version": config.MANIFEST_VERSION, "domains": entries}
 
 
-def _change_types_for(domain: Domain) -> tuple[str, ...]:
-    """What the domain's tileset actually contains, falling back to what it intends to produce.
+def _measured(domain: Domain) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`(change types, tile layers)` the domain's archive actually holds.
 
-    Measured first, because the manifest drives which views the UI offers: a domain declaring
-    `("cover", "loss")` whose cover pass was interrupted would otherwise still advertise a view
-    toggle, and switching to it would show an empty map with nothing to explain why.
+    Measured, because the manifest drives what the web builds: one toggle per state and one
+    style layer per tile layer listed, and no others. A domain declaring `("cover", "loss")`
+    whose cover pass was interrupted would otherwise still advertise a toggle onto an empty map,
+    and a style layer naming a layer its source lacks is an error MapLibre raises on every tile.
 
-    The fallback is for the pre-tiling case only -- writing a manifest before the archive exists
-    is legitimate (a provisional run, a test), and there is nothing better to say then.
+    Falls back to what the domain *intends* -- its declared states, and every cohort the range
+    implies -- only when there is no archive at all: writing a manifest before tiling is
+    legitimate (a provisional run, a test), and there is nothing better to say then. An archive
+    that is there but cannot be described is refused instead. Falling back for it too would
+    publish an invented layer list over real tiles, and `_check` would then be validating the
+    invention rather than the archive -- exactly the silent disagreement it exists to catch.
     """
     from trace_pipeline import tiles
 
-    measured = tiles.change_types_in(tiles.pmtiles_path(domain.id))
-    return measured if measured is not None else tuple(domain.change_types)
+    archive = tiles.pmtiles_path(domain.id)
+    if not archive.exists():
+        change_types = tuple(domain.change_types)
+        return change_types, tuple(Cohorts(*domain.temporal_range()).all_layers(change_types))
 
+    source_layers = tiles.source_layers_in(archive)
+    if source_layers is None:
+        raise ManifestError(
+            f"{domain.id}: {archive.name} exists but its layers cannot be read, so the manifest "
+            f"cannot say what it holds. Is `pmtiles` installed? Rebuild with:\n"
+            f"  python -m trace_pipeline.cli tiles {domain.id}"
+        )
 
-def _source_layers_for(domain: Domain, change_types: Sequence[str]) -> tuple[str, ...]:
-    """The tile layers the web should build style layers for -- measured, like the states.
+    change_types = tiles.change_types_in(archive)
+    if change_types is None:
+        raise ManifestError(
+            f"{domain.id}: {archive.name} holds a layer that is not a cohort -- an archive from "
+            f"before cohort layers, which the web cannot draw. Rebuild with:\n"
+            f"  python -m trace_pipeline.cli tiles {domain.id}"
+        )
 
-    The web builds one style layer per name listed and no others, so the list has to be what the
-    archive holds: a cohort with no features has no layer, and a style layer naming a layer its
-    source lacks is an error MapLibre raises on every tile. The fallback, for the same pre-tiling
-    case as above, is every cohort the range and states imply.
-    """
-    from trace_pipeline import tiles
-
-    measured = tiles.source_layers_in(tiles.pmtiles_path(domain.id))
-    if measured is not None:
-        return measured
-    return tuple(Cohorts(*domain.temporal_range()).all_layers(change_types))
+    return change_types, source_layers
 
 
 def _check(entries: Sequence[dict[str, Any]]) -> None:
