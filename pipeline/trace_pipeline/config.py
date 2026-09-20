@@ -262,8 +262,35 @@ WATER_COVER_RETAINED_PCT: Final[float] = 75.4
 
 M2_PER_HA: Final[float] = 10_000.0
 
+# --- Tiling: the two regimes (T-036) ------------------------------------------------------------
+#
+# From DETAIL_ZOOM up, a tile holds every feature exactly as extracted -- its id, its metric,
+# nothing pooled, count-verified. Below it, a tile holds one feature per cohort layer and
+# attribute group, and patches smaller than a screen pixel are pooled into squares of the same
+# total area (tippecanoe's tiny-polygon reduction). At the island view (z7) a 30 m patch is a
+# quarter of a pixel and a z7 tile carried ~400k of them; parsing that was the whole of the
+# opening view's wait after T-034.
+#
+# 11 is where the web's `SCALE_SPLIT_ZOOM` says a patch's fill becomes visible, and it is the
+# lowest zoom at which the pooling threshold cannot reach a real patch: a MIN_PATCH_PIXELS patch
+# is ~18 tile units² at z10 and ~72 at z11 against TINY_POLYGON_SIZE² = 36, measured at the AOI's
+# southern edge where a unit is widest (`tiles.detail_floor_units2`). `tiles.build` refuses to run
+# if that floor ever comes within DETAIL_FLOOR_MARGIN of the threshold.
+DETAIL_ZOOM: Final[int] = 11
+
+# tippecanoe pools polygons under this many tile units *squared* (its --tiny-polygon-size). 6 is
+# the largest its docs call artefact-free; 2, the default, would leave everything from z8 up
+# unpooled (a 2-pixel patch is 1.2 units² at z8, 4.5 at z9, 18 at z10).
+TINY_POLYGON_SIZE: Final[int] = 6
+
+# How far above the pooling threshold the smallest real patch must sit at DETAIL_ZOOM. Covers the
+# pixel's 0.070-0.072 ha spread across the island and rounding in the projection.
+DETAIL_FLOOR_MARGIN: Final[float] = 1.5
+
 # --- Output -----------------------------------------------------------------------------------
-MANIFEST_VERSION: Final[int] = 2
+# 3: two regimes split at `tiles.detailZoom` -- pooled below it, exact from it up (T-036).
+# 2: one tile layer per cohort (`tiles.sourceLayers`) rather than one named for the domain.
+MANIFEST_VERSION: Final[int] = 3
 
 # Domain identity hues (A2). Extent = domain hue; loss = the universal change signal, which lives
 # in the web app's colors.ts because it is cross-domain by definition.

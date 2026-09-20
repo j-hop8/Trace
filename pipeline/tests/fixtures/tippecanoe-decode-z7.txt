@@ -1,0 +1,22 @@
+{ "type": "FeatureCollection", "properties": {
+"json": "{\"vector_layers\":[{\"id\":\"loss:2013\"}]}",
+"name": "x"
+}, "features": [
+{ "type": "FeatureCollection", "properties": { "zoom": 7, "x": 106, "y": 55 }, "features": [
+{ "type": "FeatureCollection", "properties": { "layer": "loss:2013", "version": 2, "extent": 4096 }, "features": [
+{ "type": "Feature", "id": 1, "properties": { "pooled": true }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 120.0, 23.0 ], [ 120.1, 23.0 ], [ 120.1, 23.1 ], [ 120.0, 23.1 ], [ 120.0, 23.0 ] ] ] } }
+,
+{ "type": "Feature", "id": 2, "properties": { }, "geometry": { "type": "Point", "coordinates": [ 120.0, 23.0 ] } }
+] }
+,
+{ "type": "FeatureCollection", "properties": { "layer": "cover:2001-2026", "version": 2, "extent": 4096 }, "features": [
+{ "type": "Feature", "id": 1, "properties": { }, "geometry": { "type": "Point", "coordinates": [ 120.0, 23.0 ] } }
+] }
+] }
+,
+{ "type": "FeatureCollection", "properties": { "zoom": 7, "x": 107, "y": 55 }, "features": [
+{ "type": "FeatureCollection", "properties": { "layer": "loss:2013", "version": 2, "extent": 4096 }, "features": [
+{ "type": "Feature", "id": 1, "properties": { }, "geometry": { "type": "Point", "coordinates": [ 120.0, 23.0 ] } }
+] }
+] }
+] }

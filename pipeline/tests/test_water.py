@@ -566,7 +566,11 @@ def test_manifest_entry_is_well_formed(monkeypatch):
     assert entry["temporal"] == {"start": 1984, "end": 2021}
     assert entry["hue"] == config.DOMAIN_HUES["water"]
     assert entry["source"]["attribution"] == "Source: EC JRC/Google"
-    assert entry["tiles"] == {"url": "pmtiles:///data/water.pmtiles", "sourceLayers": ["loss:2013"]}
+    assert entry["tiles"] == {
+        "url": "pmtiles:///data/water.pmtiles",
+        "sourceLayers": ["loss:2013"],
+        "detailZoom": config.DETAIL_ZOOM,
+    }
 
 
 def test_confidence_is_stated_not_fabricated_per_feature():
