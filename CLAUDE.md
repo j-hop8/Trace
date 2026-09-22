@@ -61,6 +61,20 @@ The split follows the kind of state ([layerSpec.ts](web/src/domains/layerSpec.ts
   — about 10 — whatever the data holds. `layerSpec.test.ts` pins this with MapLibre's own filter
   evaluator; `layerSpec.tiles.test.ts` checks it against every built tileset.
 
+A fixed filter is not a free one. MapLibre's worker runs every style layer's filter over every
+feature of the **tile layer** the style layer names, so 589 cohort layers reading one tile layer
+per domain meant each feature was filtered 589 times per tile — 43 s of worker time for one z7
+water tile, measured, and the opening view never drew. So the pipeline writes each feature into
+the tile layer of its cohort (`pipeline/trace_pipeline/cohorts.py` — the same rule as
+`layerSpec.ts`, node for node): `loss:2013` for a year cohort, `cover:2001-2026` for a node, with
+a cover feature copied once per node canonical for its validity (~2.1 copies for a closed stretch,
+one for open-ended cover). Each style layer reads its own cohort's tile layer and keeps its filter:
+the filter is the definition, the tile layer is the index, and the tiles test asserts that for
+every style layer the filter over the whole tile selects exactly its tile layer. The manifest
+lists the tile layers the archive holds (`tiles.sourceLayers`, measured like `changeTypes`), and
+a cohort with no layer gets no style layer. Still one tileset per domain; still time as a feature
+attribute.
+
 Cover used to be drawn by painting loss patches over a never-ending baseline in the ground colour
 to cut holes in it (`cleared-*`). That was the web deriving cover from loss; it is gone.
 

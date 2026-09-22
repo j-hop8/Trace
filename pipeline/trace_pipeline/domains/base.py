@@ -35,8 +35,8 @@ class SourceInfo:
 class Domain(ABC):
     """One measurable subject, extracted into dated features."""
 
-    #: Stable identifier. Becomes the `domain` property on every feature this module emits, the
-    #: PMTiles filename, and the source-layer name. Never rename without a manifest version bump.
+    #: Stable identifier. Becomes the `domain` property on every feature this module emits and
+    #: the PMTiles filename. Never rename without a manifest version bump.
     id: str
 
     #: Bilingual display label. The web app renders these; it never derives a label from `id`.
@@ -84,7 +84,9 @@ class Domain(ABC):
     #: to honour it was interrupted, and the UI would then offer a view toggle onto an empty map.
     change_types: tuple[str, ...] = ("loss",)
 
-    def manifest_entry(self, tiles_url: str, change_types: Sequence[str]) -> dict[str, Any]:
+    def manifest_entry(
+        self, tiles_url: str, change_types: Sequence[str], source_layers: Sequence[str]
+    ) -> dict[str, Any]:
         """Describe this domain for `data/domains.json`.
 
         Concrete by design -- the manifest shape is a contract with the web app, so subclasses
@@ -110,7 +112,9 @@ class Domain(ABC):
                 "licence": self.source.licence,
             },
             "caveat": self.caveat,
-            "tiles": {"url": tiles_url, "sourceLayer": self.id},
+            # One tile layer per cohort (`cohorts.py`), measured from the archive like the states
+            # above: the web builds exactly one style layer per name here.
+            "tiles": {"url": tiles_url, "sourceLayers": list(source_layers)},
         }
 
 

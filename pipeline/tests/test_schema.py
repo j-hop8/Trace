@@ -317,6 +317,20 @@ def test_change_type_values_match_the_typescript_union():
 # tests/test_schema.py, and manifest.py is the other half of the same pipeline-to-web contract.
 
 
+@pytest.fixture(autouse=True)
+def no_built_tiles(tmp_path, monkeypatch):
+    """Point the manifest at an empty data directory.
+
+    `manifest.build` measures the states and tile layers from `data/<id>.pmtiles` when it exists,
+    so on a machine that has run the pipeline these tests would be reading whatever archive
+    happens to be there -- and passing or failing on it -- rather than on the fallback path they
+    are written against.
+    """
+    from trace_pipeline import tiles
+
+    monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+
+
 def make_domain(domain_id="water", *, start=1984, end=2024, attribution="Source: EC JRC/Google"):
     class Fake(base.Domain):
         id = domain_id
@@ -352,7 +366,8 @@ def test_build_produces_the_shape_the_web_app_reads():
     entry = payload["domains"][0]
     assert entry["id"] == "water"
     assert entry["temporal"] == {"start": 1984, "end": 2024}
-    assert entry["tiles"]["sourceLayer"] == "water"
+    assert entry["tiles"]["url"] == "pmtiles:///data/water.pmtiles"
+    assert all(":" in layer for layer in entry["tiles"]["sourceLayers"])
     assert entry["hue"] == config.DOMAIN_HUES["water"]
 
 

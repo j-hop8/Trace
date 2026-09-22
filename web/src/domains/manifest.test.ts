@@ -20,7 +20,7 @@ const entry = (changeTypes?: DomainManifestEntry['changeTypes']): DomainManifest
   temporal: { start: 2000, end: 2020 },
   source: { name: '', version: '', attribution: '', citation: '', licence: '' },
   caveat: '',
-  tiles: { url: 'pmtiles:///data/x.pmtiles', sourceLayer: 'x' },
+  tiles: { url: 'pmtiles:///data/x.pmtiles', sourceLayers: ['loss:2001'] },
 });
 
 describe('selectableTypesByKind', () => {

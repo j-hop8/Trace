@@ -74,19 +74,33 @@ def cmd_tiles(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_manifest(_args: argparse.Namespace) -> int:
+    """Write `data/domains.json` from the archives already built.
+
+    A step of its own, not only the tail of `all`: the manifest describes the built tiles (which
+    states and which cohort layers they hold), so re-tiling without re-extracting -- a tiling
+    change on GeoJSON that took hours of Earth Engine to produce -- needs a way to republish it.
+    """
+    if not domain_registry.all_ids():
+        print(_no_domains_message(), file=sys.stderr)
+        return 1
+
+    from trace_pipeline import manifest
+
+    path = manifest.write([domain_registry.get(d) for d in domain_registry.all_ids()])
+    print(f"wrote {path}", flush=True)
+    return 0
+
+
 def cmd_all(args: argparse.Namespace) -> int:
     if not domain_registry.all_ids():
         print(_no_domains_message(), file=sys.stderr)
         return 1
 
-    for step in (cmd_extract, cmd_tiles):
+    for step in (cmd_extract, cmd_tiles, cmd_manifest):
         code = step(args)
         if code != 0:
             return code
-
-    from trace_pipeline import manifest
-
-    manifest.write([domain_registry.get(d) for d in domain_registry.all_ids()])
     return 0
 
 
@@ -109,6 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name, help=help_text)
         sub.add_argument("domain", nargs="?", help="domain id; omit to process every domain")
         sub.set_defaults(func=func)
+
+    subparsers.add_parser(
+        "manifest", help="write data/domains.json from the tiles already built"
+    ).set_defaults(func=cmd_manifest)
 
     all_parser = subparsers.add_parser("all", help="extract, tile, and write the manifest")
     all_parser.set_defaults(func=cmd_all, domain=None)

@@ -263,7 +263,7 @@ WATER_COVER_RETAINED_PCT: Final[float] = 75.4
 M2_PER_HA: Final[float] = 10_000.0
 
 # --- Output -----------------------------------------------------------------------------------
-MANIFEST_VERSION: Final[int] = 1
+MANIFEST_VERSION: Final[int] = 2
 
 # Domain identity hues (A2). Extent = domain hue; loss = the universal change signal, which lives
 # in the web app's colors.ts because it is cross-domain by definition.

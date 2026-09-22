@@ -47,7 +47,23 @@ export interface DomainManifestEntry {
   source: DomainSource;
   /** The layer's honest limitation, shown in the UI (A5). */
   caveat: string;
-  tiles: { url: string; sourceLayer: string };
+  tiles: {
+    url: string;
+    /**
+     * The tile layers the archive holds -- one per cohort, named by the pipeline with the same
+     * rule `layerSpec` builds cohorts by: `loss:2013` for a year, `cover:2001-2026` for an
+     * interval node. Measured from the archive like `changeTypes`, so the list is what is there:
+     * a cohort with no features has no layer, and `layerSpec` builds a style layer only for a
+     * cohort listed here. A style layer naming a layer the source lacks is an error MapLibre
+     * raises on every tile.
+     *
+     * Why the tile is split this way at all: MapLibre's worker runs a style layer's filter over
+     * every feature of the tile layer it names. Hundreds of cohort layers over one tile layer
+     * meant every feature was filtered hundreds of times per tile -- minutes of parsing at the
+     * opening view. One tile layer per cohort makes each filter a pass over its own cohort.
+     */
+    sourceLayers: string[];
+  };
 }
 
 export interface DomainManifest {
@@ -55,8 +71,12 @@ export interface DomainManifest {
   domains: DomainManifestEntry[];
 }
 
-/** The manifest version this build understands. A bump means the tile contract changed. */
-const SUPPORTED_VERSION = 1;
+/**
+ * The manifest version this build understands. A bump means the tile contract changed.
+ *
+ * 2: one tile layer per cohort (`tiles.sourceLayers`) rather than one named for the domain.
+ */
+const SUPPORTED_VERSION = 2;
 
 /** What to tell someone whose manifest is missing. The fix is almost always the first line. */
 const MISSING_MANIFEST_HINT =

@@ -18,6 +18,7 @@ import { featureFilter } from '@maplibre/maplibre-gl-style-spec';
 import { describe, expect, it } from 'vitest';
 
 import {
+  cohortSourceLayers,
   cohortYears,
   intervalNodes,
   layerIdsFor,
@@ -27,6 +28,7 @@ import {
   maxWritesPerStep,
   opacityChannel,
   opacityUpdatesFor,
+  sourceLayerFor,
 } from '@/domains/layerSpec';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import type { ChangeType } from '@/types/feature';
@@ -35,6 +37,9 @@ import type { ChangeType } from '@/types/feature';
  * A stand-in manifest entry rather than the real one: `data/domains.json` is generated and
  * gitignored, so a test that read it would pass or fail depending on whether the pipeline had been
  * run. Only the fields the layer builder actually reads matter here.
+ *
+ * `tiles.sourceLayers` is filled in below with every layer the model would read, as a manifest
+ * for a complete archive would list -- the builder makes a style layer only for a listed one.
  */
 const entry: DomainManifestEntry = {
   id: 'forest',
@@ -50,8 +55,9 @@ const entry: DomainManifestEntry = {
     licence: 'CC-BY-4.0',
   },
   caveat: 'Tree-cover loss, not deforestation.',
-  tiles: { url: 'pmtiles:///data/forest.pmtiles', sourceLayer: 'forest' },
+  tiles: { url: 'pmtiles:///data/forest.pmtiles', sourceLayers: [] },
 };
+entry.tiles.sourceLayers = cohortSourceLayers(entry);
 
 /**
  * A water-shaped entry, for the half of the model the forest fixture cannot reach: three change
@@ -71,8 +77,9 @@ const water: DomainManifestEntry = {
     licence: 'Free to use with attribution',
   },
   caveat: 'Surface water at 30 m resolution.',
-  tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayer: 'water' },
+  tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayers: [] },
 };
+water.tiles.sourceLayers = cohortSourceLayers(water);
 
 /** A domain with change and no cover at all — the case the cover machinery must stay out of. */
 const changeOnly: DomainManifestEntry = { ...water, changeTypes: ['gain', 'loss', 'stable'] };
@@ -216,6 +223,72 @@ describe('interval cohorts', () => {
     expect(at({ change_type: 'cover', valid_from: 2000 })).toBe(true);
     expect(at({ change_type: 'cover', valid_from: 2000, valid_to: 2026 })).toBe(true);
     expect(at({ change_type: 'cover', valid_from: 2000, valid_to: 2025 })).toBe(false);
+  });
+});
+
+describe('each cohort reads a tile layer of its own', () => {
+  // The half of the model that lives in the pipeline. MapLibre runs a style layer's filter over
+  // every feature of the tile layer it names, so with every cohort reading one tile layer each
+  // feature was filtered once per cohort — 416 times for water — and the opening view took
+  // minutes to parse. The pipeline writes each feature into its cohort's layer under the rule
+  // below; `layerSpec.tiles.test.ts` checks the two agree against the built archives.
+  it('names the tile layer after the cohort, the way the pipeline does', () => {
+    expect(sourceLayerFor('loss', 2013)).toBe('loss:2013');
+    expect(sourceLayerFor('cover', { start: 2001, end: 2026, parent: null })).toBe(
+      'cover:2001-2026',
+    );
+  });
+
+  it('reads, for every layer, the tile layer of its own cohort and nothing wider', () => {
+    const { layers } = layersFor(entry, 2013, ALL);
+    const sourceLayerOf = (id: string) =>
+      (layers.find((l) => l.id === id) as { 'source-layer': string })['source-layer'];
+
+    expect(sourceLayerOf(`trace-${entry.id}-fill-loss-2013`)).toBe('loss:2013');
+    expect(sourceLayerOf(`trace-${entry.id}-pattern-loss-2013`)).toBe('loss:2013');
+    expect(sourceLayerOf(ROOT)).toBe('cover:2001-2026');
+    expect(sourceLayerOf(`trace-${entry.id}-cover-outline-2013-2014`)).toBe('cover:2013-2014');
+  });
+
+  it('enumerates one tile layer per year cohort and per node, shared across a state’s roles', () => {
+    expect(cohortSourceLayers(entry)).toHaveLength(NODES + YEARS);
+    expect(cohortSourceLayers(water)).toHaveLength(2 * 38 - 1 + 3 * 38);
+    const { changeTypes: _omitted, ...silent } = water;
+    expect(cohortSourceLayers(silent)).toEqual([]);
+  });
+
+  it('builds no style layer for a cohort the archive has no layer for', () => {
+    // A cohort with no features gets no tile layer from tippecanoe, and a style layer naming a
+    // layer its source lacks is an error MapLibre raises on every tile. The manifest lists what
+    // is there; nothing else is built, and nothing else is written to, queried, or toggled.
+    const missing = new Set(['loss:2013', 'cover:2013-2014']);
+    const sparse: DomainManifestEntry = {
+      ...entry,
+      tiles: {
+        ...entry.tiles,
+        sourceLayers: entry.tiles.sourceLayers.filter((l) => !missing.has(l)),
+      },
+    };
+
+    const built = layersFor(sparse, 2013, ALL).layers;
+    expect(built).toHaveLength(LAYERS - CHANGE_ROLES - COVER_ROLES);
+    expect(
+      built.some((l) => (l as { 'source-layer': string })['source-layer'] === 'loss:2013'),
+    ).toBe(false);
+
+    const gone = [`trace-${entry.id}-fill-loss-2013`, `trace-${entry.id}-cover-fill-2013-2014`];
+    for (const id of gone) {
+      expect(layerIdsFor(sparse)).not.toContain(id);
+      expect(layerIdsForSelection(sparse, ALL)).not.toContain(id);
+      expect(layerIdsForYear(sparse, 2013)).not.toContain(id);
+      expect(opacityUpdatesFor(sparse, 2013).map(([layerId]) => layerId)).not.toContain(id);
+    }
+    // The bound is on the full model, so it still holds.
+    expect(maxWritesPerStep(sparse)).toBe(maxWritesPerStep(entry));
+  });
+
+  it('builds nothing at all for a manifest that lists no tile layers', () => {
+    expect(layerIdsFor({ ...entry, tiles: { ...entry.tiles, sourceLayers: [] } })).toEqual([]);
   });
 });
 
