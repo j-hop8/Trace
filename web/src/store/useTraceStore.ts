@@ -7,7 +7,7 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 
 import type { ChangeType, DomainId, Kind, TraceFeatureProperties } from '@/types/feature';
-import { combinedRange, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
+import { combinedRange, kindsOf, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
 import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
 
 export interface SelectedFeature {
@@ -24,15 +24,21 @@ interface TraceState {
   activeDomains: Set<DomainId>;
 
   /**
-   * Domain ids that are switched on but whose tiles are not on screen yet.
+   * For each switched-on domain, the kinds of state that are not on screen yet.
    *
    * Separate from `activeDomains` because they answer different questions: one is what the reader
    * asked for, the other is what has arrived. Forest is 7.5 MB against the basemap's 498 KB at the
    * opening view, and its layers are deliberately held back until the basemap has painted, so there
    * is a real window where a layer is on and showing nothing. Saying so beats an empty map that
    * looks identical to a layer with no data.
+   *
+   * Per kind rather than per domain because the kinds arrive one after the other: cover goes on
+   * first and change is parsed behind it, so there is a second window where the map shows a
+   * domain's cover as if that were the whole of it. A domain with an entry here has something
+   * missing; one whose every kind is listed has nothing on screen at all. Domains with nothing
+   * missing have no entry.
    */
-  loadingDomains: Set<DomainId>;
+  loadingKinds: Map<DomainId, ReadonlySet<Kind>>;
 
   /**
    * Which of each domain's states the reader has asked to see.
@@ -79,7 +85,7 @@ interface TraceState {
    */
   toggleKind: (id: DomainId, kind: Kind) => void;
   selectedTypesFor: (id: DomainId) => Set<ChangeType>;
-  setLoadingDomains: (ids: Set<DomainId>) => void;
+  setLoadingKinds: (kinds: Map<DomainId, ReadonlySet<Kind>>) => void;
   setYear: (year: number) => void;
   /** Called by the map once a requested year is on screen. */
   setRenderedYear: (year: number) => void;
@@ -103,6 +109,14 @@ function clampYear(
   const range = combinedRange(active);
   if (!range) return year;
   return Math.min(Math.max(year, range.start), range.end);
+}
+
+/** The loading report without the domains that are no longer switched on. */
+function onlyActive(
+  loadingKinds: Map<DomainId, ReadonlySet<Kind>>,
+  activeDomains: Set<DomainId>,
+): Map<DomainId, ReadonlySet<Kind>> {
+  return new Map([...loadingKinds].filter(([domain]) => activeDomains.has(domain)));
 }
 
 /**
@@ -133,9 +147,7 @@ function withSelectedTypes(
   return {
     selectedTypes: new Map(state.selectedTypes).set(id, nextTypes),
     activeDomains,
-    loadingDomains: new Set(
-      [...state.loadingDomains].filter((domain) => activeDomains.has(domain)),
-    ),
+    loadingKinds: onlyActive(state.loadingKinds, activeDomains),
     selected: keepSelection ? state.selected : null,
     year: clampYear(state.year, state.manifest, activeDomains),
   };
@@ -145,7 +157,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   manifest: null,
   manifestError: null,
   activeDomains: new Set(),
-  loadingDomains: new Set(),
+  loadingKinds: new Map(),
   selectedTypes: new Map(),
   year: new Date().getFullYear(),
   renderedYear: new Date().getFullYear(),
@@ -177,8 +189,8 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       selectedTypes: new Map(manifest.domains.map((d) => [d.id, new Set(selectableTypes(d))])),
       // ...and none of it has arrived yet. Not a guess: the layers are deliberately held back until
       // the basemap has painted, so at this instant every domain is genuinely switched on and
-      // showing nothing. The map clears these as each source finishes loading.
-      loadingDomains: new Set(manifest.domains.map((d) => d.id)),
+      // showing nothing. The map clears these kind by kind as each source finishes loading.
+      loadingKinds: new Map(manifest.domains.map((d) => [d.id, new Set(kindsOf(d))])),
       // Start at the most recent year any domain covers, so the first paint shows the present
       // rather than an arbitrary midpoint.
       year: Number.isFinite(latest) ? latest : new Date().getFullYear(),
@@ -207,14 +219,13 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       }
       // A selection belonging to a domain that just went dark would leave an orphaned readout.
       const keepSelection = state.selected && next.has(state.selected.properties.domain);
-      const loading = new Set([...state.loadingDomains].filter((domain) => next.has(domain)));
 
       return {
         activeDomains: next,
         selectedTypes,
         // A domain switched off is not loading. Left in, it would come back wearing the badge
         // until the next `sourcedata` happened to correct it.
-        loadingDomains: loading,
+        loadingKinds: onlyActive(state.loadingKinds, next),
         selected: keepSelection ? state.selected : null,
         // Toggling a layer changes the slider's bounds, and an unclamped year then disagrees with
         // the thumb: the slider clamps only what it *displays*, so a year of 1990 left over from a
@@ -258,7 +269,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
 
   selectedTypesFor: (id) => get().selectedTypes.get(id) ?? new Set(),
 
-  setLoadingDomains: (loadingDomains) => set({ loadingDomains }),
+  setLoadingKinds: (loadingKinds) => set({ loadingKinds }),
   setYear: (year) => set({ year }),
   setRenderedYear: (renderedYear) => set({ renderedYear }),
   setPlaying: (playing) => set({ playing }),

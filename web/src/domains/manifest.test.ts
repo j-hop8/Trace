@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { selectableTypes, selectableTypesByKind } from '@/domains/manifest';
+import { kindsOf, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
 import type { DomainManifestEntry } from '@/domains/manifest';
 
 const entry = (changeTypes?: DomainManifestEntry['changeTypes']): DomainManifestEntry => ({
@@ -47,5 +47,23 @@ describe('selectableTypesByKind', () => {
 
   it('is empty on both sides for a manifest that never said what it holds', () => {
     expect(selectableTypesByKind(entry(undefined))).toEqual({ cover: [], change: [] });
+  });
+});
+
+/**
+ * `kindsOf` — the kinds a domain holds, in the order they are loaded and badged.
+ */
+describe('kindsOf', () => {
+  it('lists cover before change, whatever order the manifest gave', () => {
+    expect(kindsOf(entry(['loss', 'cover', 'gain']))).toEqual(['cover', 'change']);
+  });
+
+  it('leaves out a kind the domain has no state of', () => {
+    expect(kindsOf(entry(['loss', 'gain']))).toEqual(['change']);
+    expect(kindsOf(entry(['cover']))).toEqual(['cover']);
+  });
+
+  it('is empty for a manifest that never said what it holds', () => {
+    expect(kindsOf(entry(undefined))).toEqual([]);
   });
 });

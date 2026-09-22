@@ -9,7 +9,7 @@
  * file or any component — only a new entry in the JSON.
  */
 
-import { CHANGE_TYPE_ORDER, KIND_OF } from '@/types/feature';
+import { CHANGE_TYPE_ORDER, KIND_OF, KIND_ORDER } from '@/types/feature';
 import type { ChangeType, DomainId, Kind } from '@/types/feature';
 
 export interface DomainSource {
@@ -188,4 +188,16 @@ export function selectableTypesByKind(entry: DomainManifestEntry): Record<Kind, 
   const byKind: Record<Kind, ChangeType[]> = { cover: [], change: [] };
   for (const changeType of selectableTypes(entry)) byKind[KIND_OF[changeType]].push(changeType);
   return byKind;
+}
+
+/**
+ * The kinds this domain holds at least one state of, in `KIND_ORDER`.
+ *
+ * The one list that both the map and the controls walk: a domain is loaded one kind at a time,
+ * in this order, and it is these kinds the loading badges report on. Deriving both from the same
+ * function is what keeps a badge from naming a kind the map never builds, or the other way round.
+ */
+export function kindsOf(entry: DomainManifestEntry): Kind[] {
+  const byKind = selectableTypesByKind(entry);
+  return KIND_ORDER.filter((kind) => byKind[kind].length > 0);
 }
