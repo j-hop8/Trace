@@ -1,15 +1,25 @@
 """Turn a domain's GeoJSON into one PMTiles file.
 
-**Nothing may be dropped.** Tippecanoe's defaults are tuned for cartography: when a tile grows too
-large it discards features, and at low zoom it merges tiny polygons into dots. Both are sensible
-for a basemap and unacceptable here, because the numbers this map reports — hectares lost, patch
-counts — are the product's actual claim. A tiler quietly binning 5% of the smallest patches would
-make the map disagree with the caveat that states how much it shows, and nothing would say so.
+**Two regimes, split at `config.DETAIL_ZOOM`.** From the detail zoom up, nothing may be dropped:
+every feature is one tile feature with its id and its metric, and the built archive is checked
+feature by feature against what was written for tiling. The numbers this map reports — hectares
+lost, patch counts — are the product's actual claim, and a tiler quietly binning 5% of the
+smallest patches would make the map disagree with the caveat that states how much it shows.
 
-So the size-limit escapes are disabled rather than the drop-strategies enabled, and the result is
-verified against the input count rather than assumed. If the output is ever too large, the honest
-fix is to raise the minimum mapping unit deliberately and restate the retained percentage — not
-to let the tiler decide which data the reader gets.
+Below the detail zoom a tile is something else: the island view, where a 30 m patch is a quarter
+of a pixel and a z7 tile carried ~400k of them that no one could see as shapes — and parsing them
+was the whole of the opening view's wait. So every feature is written a second time as an
+*island copy*, confined to the zooms below the split and carrying only the attributes its cohort
+shares. Tippecanoe merges a tile's copies of one group into one feature (`--coalesce`), and pools
+polygons smaller than a screen pixel into squares of the same total area (its tiny-polygon
+reduction, the thing the previous contract switched off). Area is preserved, identity is not, and
+the caveat says so. What is verified below the split is the area: the island tiles are decoded
+and their area summed against the source's.
+
+The size-limit escapes stay disabled in both regimes: a feature is pooled by its own size, never
+dropped to fit a tile budget. If the output is ever too large, the honest fix is to raise the
+minimum mapping unit deliberately and restate the retained percentage — not to let the tiler
+decide which data the reader gets.
 
 **Every feature goes into the tile layer of its cohort** (`cohorts.py`), not into one layer named
 after the domain. The web draws a domain as hundreds of style layers, one per cohort, and
@@ -23,14 +33,18 @@ the count of *copies* this module chose to write, which is how "nothing dropped"
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from trace_pipeline import cohorts as cohorts_module
-from trace_pipeline import extract
+from trace_pipeline import config, extract, schema
 from trace_pipeline.cohorts import Cohorts
 
 if TYPE_CHECKING:
@@ -41,11 +55,24 @@ if TYPE_CHECKING:
 MIN_ZOOM = 5
 MAX_ZOOM = 14
 
-#: Flags that exist purely to stop tippecanoe from silently discarding data.
+#: Flags that exist purely to stop tippecanoe from silently discarding data to fit a budget.
+#:
+#: Tiny-polygon reduction is deliberately *not* in this list any more: below the detail zoom it
+#: is the pooling the island copies exist for, and at the detail zoom and above it cannot reach a
+#: real patch -- see :func:`detail_floor_units2`.
 NO_LOSS_FLAGS = [
     "--no-feature-limit",  # default caps a tile at 200k features and drops the rest
     "--no-tile-size-limit",  # default caps a tile at 500 KB and drops the rest
-    "--no-tiny-polygon-reduction",  # default merges sub-pixel polygons into dots at low zoom
+]
+
+#: Flags that shape the island regime. `--coalesce` merges consecutive features with identical
+#: attributes into one, `--reorder` puts such features consecutive, and the size sets the pooling
+#: threshold at its square in tile units. Detail copies are never touched by the first two: each
+#: carries its own id and metric, so no two are identical.
+POOLING_FLAGS = [
+    "--coalesce",
+    "--reorder",
+    f"--tiny-polygon-size={config.TINY_POLYGON_SIZE}",
 ]
 
 #: Geometry simplification keeps every feature and only reduces vertex counts, so it is the one
@@ -56,10 +83,30 @@ SIMPLIFICATION = 4
 #:
 #: An *early warning*, never the guarantee. Diagnostic text is not a stable correctness API: the
 #: wording can change between releases and a discard mode nobody has seen yet would print
-#: something not in this list. The guarantee is the tilestats count in :func:`verify`, which
-#: compares what landed in the archive against what went in. This just fails faster, with a more
-#: specific message, in the cases it does recognise.
-LOSS_MARKERS = ("dropping", "dropped", "Try using --drop", "polygon dust")
+#: something not in this list. The guarantee is :func:`verify`, which decodes the built tiles.
+#: This just fails faster, with a more specific message, in the cases it does recognise.
+LOSS_MARKERS = ("dropping", "dropped", "Try using --drop")
+
+#: The tile-only marker on an island copy. Never in the GeoJSON, so never in the schema: it says
+#: that this feature is a cohort's shapes pooled for one tile, not one patch, and the readout
+#: quotes no area for it.
+POOLED_PROPERTY = "pooled"
+
+#: Web Mercator's circumference, and tippecanoe's tile extent: what a tile unit measures.
+_MERCATOR_M = 40_075_016.686
+_TILE_EXTENT = 4096
+
+#: What every domain's caveat says about the island view. Appended by `Domain.manifest_entry`
+#: rather than written per domain, because it is a property of the tiling and the same for all.
+#:
+#: "About": pooling preserves area by construction, and the build measures how well -- 95-101%
+#: per zoom and kind on the T-036 archives, the shortfall at the finest pooled zoom -- which is
+#: why the sentence does not claim exactness and `verify` prints the figure every build.
+ISLAND_CAVEAT = (
+    f"Zoomed out to the island, patches smaller than a screen pixel are pooled into squares of "
+    f"about the same total area and one year's shapes are merged, so a mark there stands for "
+    f"several patches; from zoom {config.DETAIL_ZOOM} in, every patch is drawn on its own."
+)
 
 
 class TilingError(RuntimeError):
@@ -99,28 +146,63 @@ def require_pmtiles() -> str:
     return path
 
 
+def require_tippecanoe_decode() -> str:
+    """`tippecanoe-decode`, which ships with tippecanoe and is how the built tiles are read back.
+
+    Required for the same reason `pmtiles` is: it is what proves the detail regime holds every
+    feature and the island regime holds the area, and a build that cannot be checked is refused
+    rather than passed.
+    """
+    path = shutil.which("tippecanoe-decode")
+    if not path:
+        raise TilingError(
+            "tippecanoe-decode is not on PATH, so the built tiles cannot be read back and "
+            "checked. It is installed alongside tippecanoe (brew install tippecanoe)."
+        )
+    return path
+
+
 def pmtiles_path(domain_id: str) -> Path:
     return extract.DATA_DIR / f"{domain_id}.pmtiles"
 
 
-def write_tippecanoe_input(
-    geojson: Path, destination: Path, cohorts: Cohorts
-) -> tuple[int, int, int]:
-    """Rewrite the collection as one line per tile feature, each naming its cohort's layer.
+@dataclass(frozen=True)
+class TilingInput:
+    """What `write_tippecanoe_input` decided to tile -- the reference every check runs against."""
+
+    #: Features in the GeoJSON.
+    source_count: int
+    #: Detail copies written: one per cohort layer a feature belongs in. Island copies are one
+    #: per detail copy by construction and are not counted separately.
+    written: int
+    #: Source features with no cohort -- cover gone before the range began.
+    unplaced: int
+    #: Sum of `metric.area_ha` over the copies written, per kind of state (`cover`, `change`), so
+    #: the island tiles' pooled area can be measured against what went in.
+    area_ha_by_kind: dict[str, float] = field(default_factory=dict)
+
+
+def write_tippecanoe_input(geojson: Path, destination: Path, cohorts: Cohorts) -> TilingInput:
+    """Rewrite the collection as tile features, each naming its cohort's layer, in both regimes.
 
     Tippecanoe reads newline-delimited features and honours a per-feature `tippecanoe.layer`, so
     this is how a feature is steered into its cohort's layer -- and how a cover feature is written
-    once per interval node it belongs to. Returns `(source features, tile features written,
-    source features with no cohort)`; the second is what the built archive is checked against,
-    because it is the number of features this step *decided* to tile, and a tiler that lost any
-    of them is what the check exists to catch. The third is cover that ended before the range
-    began, which no layer could draw (`Cohorts.layers_for`); it is reported, never silent.
+    once per interval node it belongs to. Each such copy is written twice: the *detail copy*,
+    confined to `config.DETAIL_ZOOM` and up, with every property and the source feature's index as
+    its `id`; and the *island copy*, confined to the zooms below, with every property but
+    `metric`, no id, and `POOLED_PROPERTY` set -- so that a tile's island copies of one cohort and
+    attribute group are identical and tippecanoe merges them into one feature.
 
-    Every copy carries the source feature's position in the collection as its `id`, which
-    tippecanoe keeps as the tile feature's id. It is the only thing that tells a copy from a
-    neighbour: single-pixel patches share every attribute, and tippecanoe simplifies each layer
-    on its own, so two copies of one feature can differ in tile geometry. The web's tiles test
-    counts a feature once by it.
+    Returns a `TilingInput`. Its `written` is what the built archive's detail regime is checked
+    against, because it is the number of features this step *decided* to tile, and a tiler that
+    lost any of them is what the check exists to catch; its `unplaced` is cover that ended before
+    the range began, which no layer could draw (`Cohorts.layers_for`) -- reported, never silent.
+
+    Every detail copy's `id` is the source feature's position in the collection, which tippecanoe
+    keeps as the tile feature's id. It is the only thing that tells a copy from a neighbour:
+    single-pixel patches share every attribute, and tippecanoe simplifies each layer on its own,
+    so two copies of one feature can differ in tile geometry. The web's tiles test counts a feature
+    once by it, and :func:`verify` counts them to prove nothing was dropped.
 
     Loads the document rather than streaming it: the extraction step already holds the whole
     collection in memory, so this adds no new ceiling.
@@ -132,25 +214,72 @@ def write_tippecanoe_input(
 
     written = 0
     unplaced = 0
+    area_ha_by_kind: dict[str, float] = {}
+    kinds = schema.kind_of()
     with destination.open("w", encoding="utf-8") as out:
         for index, feature in enumerate(features):
             layers = cohorts.layers_for(feature["properties"])
             if not layers:
                 unplaced += 1
                 continue
+            properties = feature["properties"]
+            pooled = {k: v for k, v in properties.items() if k != "metric"}
+            pooled[POOLED_PROPERTY] = True
+            kind = kinds[properties["change_type"]]
+            area_ha = float(properties.get("metric", {}).get("area_ha") or 0.0)
             for layer in layers:
-                record = {
+                area_ha_by_kind[kind] = area_ha_by_kind.get(kind, 0.0) + area_ha
+                detail = {
                     "type": "Feature",
                     "id": index,
-                    "tippecanoe": {"layer": layer},
-                    "properties": feature["properties"],
+                    "tippecanoe": {"layer": layer, "minzoom": config.DETAIL_ZOOM},
+                    "properties": properties,
                     "geometry": feature["geometry"],
                 }
-                out.write(json.dumps(record))
+                island = {
+                    "type": "Feature",
+                    "tippecanoe": {"layer": layer, "maxzoom": config.DETAIL_ZOOM - 1},
+                    "properties": pooled,
+                    "geometry": feature["geometry"],
+                }
+                out.write(json.dumps(detail))
+                out.write("\n")
+                out.write(json.dumps(island))
                 out.write("\n")
                 written += 1
 
-    return len(features), written, unplaced
+    return TilingInput(len(features), written, unplaced, area_ha_by_kind)
+
+
+def detail_floor_units2() -> float:
+    """The smallest real patch, in tile units² at `DETAIL_ZOOM`, where a tile unit is widest.
+
+    What makes the detail regime provably untouched by the pooling: tippecanoe pools a polygon
+    under `TINY_POLYGON_SIZE`² units² whatever the zoom, and a `MIN_PATCH_PIXELS` patch -- the
+    smallest thing any domain ships -- measures this many at the detail zoom. A tile unit is
+    widest at the AOI's southern edge, so that is where a patch is fewest units, and the figure
+    here is that worst case. `build` refuses to run if it comes within `DETAIL_FLOOR_MARGIN` of
+    the threshold; the margin covers the pixel's 0.070-0.072 ha spread across the island.
+    """
+    south = config.TAIWAN_BBOX[1]
+    metres_per_unit = (
+        _MERCATOR_M * math.cos(math.radians(south)) / 2**config.DETAIL_ZOOM / _TILE_EXTENT
+    )
+    patch_m2 = config.MIN_PATCH_PIXELS * config.TAIWAN_PIXEL_HA * config.M2_PER_HA
+    return patch_m2 / metres_per_unit**2
+
+
+def require_detail_floor() -> None:
+    """Refuse to build tiles whose detail regime the pooling could reach."""
+    floor = detail_floor_units2()
+    threshold = config.TINY_POLYGON_SIZE**2
+    if floor < config.DETAIL_FLOOR_MARGIN * threshold:
+        raise TilingError(
+            f"a {config.MIN_PATCH_PIXELS}-pixel patch is {floor:.0f} tile units² at zoom "
+            f"{config.DETAIL_ZOOM}, within {config.DETAIL_FLOOR_MARGIN}x of the pooling threshold "
+            f"of {threshold}: tippecanoe could pool a real patch in the detail regime. Raise "
+            f"config.DETAIL_ZOOM or lower config.TINY_POLYGON_SIZE."
+        )
 
 
 def build(domain: Domain) -> Path:
@@ -158,6 +287,8 @@ def build(domain: Domain) -> Path:
     tippecanoe = require_tippecanoe()
     # Checked up front, not after a 40-second tiling run, so a missing tool fails immediately.
     require_pmtiles()
+    require_tippecanoe_decode()
+    require_detail_floor()
 
     source = extract.geojson_path(domain.id)
     if not source.exists():
@@ -197,6 +328,7 @@ def build(domain: Domain) -> Path:
         str(MAX_ZOOM),
         f"--simplification={SIMPLIFICATION}",
         *NO_LOSS_FLAGS,
+        *POOLING_FLAGS,
         "--force",
         str(tippecanoe_input),
     ]
@@ -205,15 +337,16 @@ def build(domain: Domain) -> Path:
     # criterion is that a failed run leaves no half-written archive behind, and that has to hold
     # for the exceptions nobody anticipated too — not only the ones with a matching `except`.
     try:
-        source_count, expected, unplaced = write_tippecanoe_input(source, tippecanoe_input, cohorts)
+        tiled = write_tippecanoe_input(source, tippecanoe_input, cohorts)
         print(
-            f"[{domain.id}] tiling {source_count:,} features as {expected:,} cohort copies…",
+            f"[{domain.id}] tiling {tiled.source_count:,} features as {tiled.written:,} cohort "
+            f"copies, each exact from zoom {config.DETAIL_ZOOM} and pooled below it…",
             flush=True,
         )
-        if unplaced:
+        if tiled.unplaced:
             print(
-                f"[{domain.id}] {unplaced:,} cover features end before {cohorts.first_year} and "
-                f"have no year the map can show; left out of the tiles.",
+                f"[{domain.id}] {tiled.unplaced:,} cover features end before "
+                f"{cohorts.first_year} and have no year the map can show; left out of the tiles.",
                 flush=True,
             )
 
@@ -230,7 +363,7 @@ def build(domain: Domain) -> Path:
                 f"with the areas the UI reports:\n  " + "\n  ".join(lost[:5])
             )
 
-        verify(staging, cohorts, expected)
+        verify(staging, cohorts, tiled.written, tiled.area_ha_by_kind, domain.id)
     except BaseException:
         staging.unlink(missing_ok=True)
         raise
@@ -246,12 +379,35 @@ def build(domain: Domain) -> Path:
 PMTILES_MAGIC = b"PMTiles"
 
 
-def verify(archive: Path, cohorts: Cohorts, expected_features: int) -> None:
+#: The least of the source's area the island tiles may hold, per kind. Pooling preserves area by
+#: construction, so this is a check that tippecanoe did what its documentation says, set low
+#: enough that dithering's per-tile rounding cannot trip it and high enough that a regime built
+#: wrong -- a threshold that swallowed real patches, a flag that dropped features -- cannot pass.
+ISLAND_AREA_FLOOR = 0.9
+
+#: The island zooms whose area is measured: the opening view, and the last zoom before the split,
+#: where the most is pooled at the finest scale.
+ISLAND_AREA_ZOOMS = (7, config.DETAIL_ZOOM - 1)
+
+
+def verify(
+    archive: Path,
+    cohorts: Cohorts,
+    expected_features: int,
+    area_ha_by_kind: Mapping[str, float],
+    domain_id: str = "",
+) -> None:
     """Post-conditions on the built archive. Raises rather than warning.
 
     Checked rather than assumed because every failure here is silent: a wrong-format file still
     has the right name, a tiler that dropped features still exits zero, and a layer the web never
     asks for is simply data that never draws.
+
+    Three questions, in the order they can be answered. Is it the archive it claims to be, holding
+    only layers the web builds? Does the detail regime hold every copy that was written -- read
+    off the `DETAIL_ZOOM` tiles feature by feature, since tilestats counts what tippecanoe *read*,
+    not what it kept? And do the island tiles hold the source's area, kind by kind, at the zooms
+    where the most is pooled?
     """
     with archive.open("rb") as handle:
         magic = handle.read(len(PMTILES_MAGIC))
@@ -280,13 +436,137 @@ def verify(archive: Path, cohorts: Cohorts, expected_features: int) -> None:
             f"{cohorts.first_year}-{cohorts.last_year} — the features in it would never draw."
         )
 
+    # Tilestats counts every feature tippecanoe read: a detail copy and an island copy per cohort
+    # copy. So this is input accounting -- it catches a feature refused at the door (an invalid
+    # geometry, say), never one dropped from a tile -- and the two checks below are the ones that
+    # read the tiles.
     count = sum(n for _, n in counts)
-    if count != expected_features:
+    if count != 2 * expected_features:
         archive.unlink(missing_ok=True)
         raise TilingError(
-            f"{archive.name}: tiled {count:,} features but {expected_features:,} were written for "
-            f"tiling. The map would report different totals from the data."
+            f"{archive.name}: tippecanoe read {count:,} features but {2 * expected_features:,} "
+            f"were written for tiling (a detail and an island copy for each of "
+            f"{expected_features:,} cohort copies). The map would report different totals from "
+            f"the data."
         )
+
+    kept = detail_copies_in(archive)
+    if kept != expected_features:
+        archive.unlink(missing_ok=True)
+        raise TilingError(
+            f"{archive.name}: the zoom-{config.DETAIL_ZOOM} tiles hold {kept:,} distinct cohort "
+            f"copies but {expected_features:,} were written. A feature is missing from the detail "
+            f"regime, where nothing may be."
+        )
+
+    for zoom in ISLAND_AREA_ZOOMS:
+        held = island_area_ha_by_kind(archive, zoom)
+        for kind, source_ha in sorted(area_ha_by_kind.items()):
+            share = held.get(kind, 0.0) / source_ha if source_ha else 1.0
+            prefix = f"[{domain_id}] " if domain_id else ""
+            print(
+                f"{prefix}zoom {zoom} holds {share:.1%} of the {kind} area that went in "
+                f"({held.get(kind, 0.0):,.0f} of {source_ha:,.0f} ha)",
+                flush=True,
+            )
+            if share < ISLAND_AREA_FLOOR:
+                archive.unlink(missing_ok=True)
+                raise TilingError(
+                    f"{archive.name}: the zoom-{zoom} tiles hold only {share:.1%} of the {kind} "
+                    f"area that went in. Pooling is meant to preserve area; below "
+                    f"{ISLAND_AREA_FLOOR:.0%} something was dropped, not pooled."
+                )
+
+
+#: A tile header in `tippecanoe-decode` output, and a layer header inside it. Each is a line of
+#: its own, and each feature is one line, which is what lets a 1 GB decode be read as a stream.
+_TILE_HEADER = re.compile(r'"zoom": (\d+), "x": (\d+), "y": (\d+)')
+_LAYER_HEADER = re.compile(r'"layer": "([^"]+)"')
+
+
+def decoded_features(archive: Path, zoom: int) -> Iterator[tuple[int, int, str, dict[str, Any]]]:
+    """Yield `(x, y, tile layer, feature)` for every feature of every tile at one zoom.
+
+    Streams `tippecanoe-decode` rather than loading its output: the detail zoom of the water
+    archive decodes to about a gigabyte of GeoJSON, and a build should not need several times that
+    in memory to check itself. Geometry is in longitude/latitude, clipped to the tile plus
+    tippecanoe's buffer -- so a feature on a tile edge appears in both tiles, whole.
+    """
+    command = [require_tippecanoe_decode(), "-z", str(zoom), "-Z", str(zoom), str(archive)]
+    with subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding="utf-8") as proc:
+        assert proc.stdout is not None
+        x = y = -1
+        layer = ""
+        for line in proc.stdout:
+            if line.startswith('{ "type": "Feature"'):
+                yield x, y, layer, json.loads(line)
+                continue
+            header = _TILE_HEADER.search(line)
+            if header:
+                x, y = int(header[2]), int(header[3])
+                continue
+            named = _LAYER_HEADER.search(line)
+            if named:
+                layer = named[1]
+        if proc.wait() != 0:
+            raise TilingError(f"tippecanoe-decode failed on {archive.name} at zoom {zoom}")
+
+
+def detail_copies_in(archive: Path) -> int:
+    """How many distinct cohort copies the `DETAIL_ZOOM` tiles hold.
+
+    A copy is `(tile layer, id)`: the id is the source feature's index, so a cover feature written
+    into several node layers counts once per layer, exactly as it was written; and a feature cut
+    by a tile edge, present in both tiles, counts once. Every copy appears in at least one tile at
+    this zoom, so this equals the copies written if and only if none was dropped.
+    """
+    seen: set[tuple[str, int]] = set()
+    for _x, _y, layer, feature in decoded_features(archive, config.DETAIL_ZOOM):
+        if "id" not in feature:
+            raise TilingError(
+                f"{archive.name}: a zoom-{config.DETAIL_ZOOM} feature in {layer!r} has no id, "
+                f"which every detail copy must carry"
+            )
+        seen.add((layer, int(feature["id"])))
+    return len(seen)
+
+
+def island_area_ha_by_kind(archive: Path, zoom: int) -> dict[str, float]:
+    """Geodesic area the tiles at one island zoom hold, per kind of state, in hectares.
+
+    Each feature is clipped to its tile's own bounds before measuring, because tippecanoe writes a
+    feature into every tile it touches, buffer included, and summing the unclipped copies would
+    count every tile edge twice. Then the tiles are edge to edge and their sum is the layer's.
+    """
+    from pyproj import Geod
+    from shapely import clip_by_rect
+    from shapely.geometry import shape
+
+    geod = Geod(ellps="WGS84")
+    kinds = schema.kind_of()
+    held: dict[str, float] = {}
+    for x, y, layer, feature in decoded_features(archive, zoom):
+        change_type = cohorts_module.change_type_of(layer)
+        if change_type is None:
+            continue
+        geometry = shape(feature["geometry"])
+        clipped = clip_by_rect(geometry, *tile_bounds(zoom, x, y))
+        if clipped.is_empty:
+            continue
+        area_m2 = abs(geod.geometry_area_perimeter(clipped)[0])
+        kind = kinds[change_type]
+        held[kind] = held.get(kind, 0.0) + area_m2 / config.M2_PER_HA
+    return held
+
+
+def tile_bounds(zoom: int, x: int, y: int) -> tuple[float, float, float, float]:
+    """`(west, south, east, north)` of a Web Mercator tile, in degrees."""
+    n = 2**zoom
+    west = x / n * 360.0 - 180.0
+    east = (x + 1) / n * 360.0 - 180.0
+    north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
+    return west, south, east, north
 
 
 def source_layers_in(archive: Path) -> tuple[str, ...] | None:

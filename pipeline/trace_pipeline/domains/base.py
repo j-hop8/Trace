@@ -92,7 +92,8 @@ class Domain(ABC):
         Concrete by design -- the manifest shape is a contract with the web app, so subclasses
         supply the parts and this assembles them uniformly.
         """
-        from trace_pipeline.config import DOMAIN_HUES
+        from trace_pipeline import tiles
+        from trace_pipeline.config import DETAIL_ZOOM, DOMAIN_HUES
 
         first, last = self.temporal_range()
         return {
@@ -111,10 +112,18 @@ class Domain(ABC):
                 "citation": self.source.citation,
                 "licence": self.source.licence,
             },
-            "caveat": self.caveat,
+            # The domain's own limits, then the tiling's: below the detail zoom the tiles pool
+            # what a screen pixel cannot show, and that is true of every domain alike, so it is
+            # said once here rather than remembered in each domain's caveat.
+            "caveat": f"{self.caveat} {tiles.ISLAND_CAVEAT}",
             # One tile layer per cohort (`cohorts.py`), measured from the archive like the states
-            # above: the web builds exactly one style layer per name here.
-            "tiles": {"url": tiles_url, "sourceLayers": list(source_layers)},
+            # above: the web builds exactly one style layer per name here. `detailZoom` is where
+            # the tiles stop pooling and every feature is its own (`tiles.py`).
+            "tiles": {
+                "url": tiles_url,
+                "sourceLayers": list(source_layers),
+                "detailZoom": DETAIL_ZOOM,
+            },
         }
 
 

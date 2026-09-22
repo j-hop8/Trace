@@ -3,7 +3,7 @@
 import pytest
 
 import trace_pipeline.domains as domains
-from trace_pipeline import config, schema
+from trace_pipeline import config, schema, tiles
 from trace_pipeline.domains import base, water
 
 
@@ -88,11 +88,18 @@ def test_manifest_entry_matches_the_web_contract(fake_domain_cls):
     assert entry["label"]["zh"] == "水體"
     assert entry["hue"] == config.DOMAIN_HUES["water"]
     assert entry["temporal"] == {"start": 1984, "end": 2021}
-    assert entry["tiles"] == {"url": "pmtiles://water.pmtiles", "sourceLayers": ["loss:1984"]}
+    assert entry["tiles"] == {
+        "url": "pmtiles://water.pmtiles",
+        "sourceLayers": ["loss:1984"],
+        "detailZoom": config.DETAIL_ZOOM,
+    }
     # Attribution must survive into the manifest verbatim -- it is a licence obligation, and the
     # web app has no other source for it.
     assert entry["source"]["attribution"] == "Source: EC JRC/Google"
-    assert entry["caveat"]
+    # The domain's own caveat first, then the tiling's -- every domain's tiles pool the same way,
+    # so the sentence is added once here rather than remembered per domain.
+    assert entry["caveat"].startswith(fake_domain_cls().caveat)
+    assert entry["caveat"].endswith(tiles.ISLAND_CAVEAT)
 
 
 def test_temporal_range_flows_into_the_manifest(fake_domain_cls):
