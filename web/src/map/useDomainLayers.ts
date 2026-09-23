@@ -137,8 +137,10 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   /** Whether the basemap has had its turn — see `FIRST_PAINT_GRACE_MS`. */
   const [basemapPainted, setBasemapPainted] = useState(false);
 
+  // Fast Refresh re-runs effects with the old map before readyMap updates after removal.
+  // Guard every map effect and the year pump below against that removed instance.
   useEffect(() => {
-    if (!map) return;
+    if (!map || map._removed) return;
     // Reset for this map instance: `basemapPainted` otherwise carries a stale `true` forward if
     // the map is ever rebuilt, letting domain layers straight onto a fresh, unpainted map — and
     // the refs below describe sources and layers the old map took with it.
@@ -179,7 +181,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // The hatch is a runtime-drawn image, registered before any layer references it. A fill-pattern
   // naming a missing image renders nothing at all, silently dropping the loss layer.
   useEffect(() => {
-    if (!map) return;
+    if (!map || map._removed) return;
     if (map.hasImage(HATCH_IMAGE)) return;
     map.addImage(HATCH_IMAGE, createHatchImage(), { pixelRatio: 2 });
   }, [map]);
@@ -198,7 +200,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // tiles still coming in, and the ground of the second domain would arrive later for it.
   // Nothing of change is fetched or parsed until all of cover is on screen.
   useEffect(() => {
-    if (!map || !manifest) return;
+    if (!map || map._removed || !manifest) return;
     // Only ever gates the first add: once true this stays true, so later toggles are immediate.
     if (!basemapPainted) return;
 
@@ -298,7 +300,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // drawn, the next kind's own load. All three show a lit control over a map missing something,
   // which is exactly what a layer with no data for the year looks like.
   useEffect(() => {
-    if (!map || !manifest) return;
+    if (!map || map._removed || !manifest) return;
 
     const domainSourceIds = new Set(manifest.domains.flatMap(sourceIdsFor));
 
@@ -348,7 +350,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // Apply the state selection. Every change type's layers already exist, so this is a visibility
   // switch — no source churn, no refetch, and the toggle is instant.
   useEffect(() => {
-    if (!map || !manifest) return;
+    if (!map || map._removed || !manifest) return;
 
     for (const entry of manifest.domains) {
       if (!activeDomains.has(entry.id)) continue;
@@ -368,7 +370,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // simply overwritten, and the next pump jumps straight to the newest value — so a fast drag lands
   // on the year it was released on rather than grinding through the ones it passed.
   const pump = useCallback(() => {
-    if (!map || !manifest) return;
+    if (!map || map._removed || !manifest) return;
     if (inFlight.current) return;
 
     const target = requested.current;
@@ -512,7 +514,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
   // Click to select, and a pointer cursor over anything selectable. Bound once; both read the
   // layers present and shown at the moment the pointer is over them.
   useEffect(() => {
-    if (!map || !manifest) return;
+    if (!map || map._removed || !manifest) return;
 
     // Cohorts for years after the one on screen are still on the map, drawn at zero opacity, and
     // `queryRenderedFeatures` reads geometry rather than paint. Asking for every layer the domain
