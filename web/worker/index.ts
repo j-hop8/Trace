@@ -117,6 +117,24 @@ function unsatisfiable(size: number): Response {
   return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
 }
 
+function objectHeaders(object: DataObject, key: string): Headers {
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('ETag', object.httpEtag);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Cache-Control', cacheControl(key));
+  return headers;
+}
+
+/**
+ * `If-None-Match` is evaluated before `Range` (RFC 9110 §13.2.2), so a client whose copy is
+ * current gets a 304 whatever range it asked for — even one this object cannot satisfy.
+ */
+function notModified(request: Request, object: DataObject, key: string): Response | null {
+  if (!etagMatches(request.headers.get('If-None-Match'), object.httpEtag)) return null;
+  return new Response(null, { status: 304, headers: objectHeaders(object, key) });
+}
+
 export async function serveData(
   request: Request,
   key: string,
@@ -139,20 +157,16 @@ export async function serveData(
     const head = await bucket.head(key);
     if (!head) return notFound(key);
     if (resolveRange(range, head.size)) throw error;
-    return unsatisfiable(head.size);
+    return notModified(request, head, key) ?? unsatisfiable(head.size);
   }
   if (!object) return notFound(key);
 
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set('ETag', object.httpEtag);
-  headers.set('Accept-Ranges', 'bytes');
-  headers.set('Cache-Control', cacheControl(key));
-
-  if (etagMatches(request.headers.get('If-None-Match'), object.httpEtag)) {
+  const unchanged = notModified(request, object, key);
+  if (unchanged) {
     await object.body.cancel();
-    return new Response(null, { status: 304, headers });
+    return unchanged;
   }
+  const headers = objectHeaders(object, key);
 
   const body = request.method === 'HEAD' ? null : object.body;
   if (request.method === 'HEAD') await object.body.cancel();

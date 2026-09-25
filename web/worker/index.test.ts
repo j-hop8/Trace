@@ -221,6 +221,17 @@ describe('the /data host', () => {
     expect(stale.status).toBe(200);
   });
 
+  it('answers a current copy with 304 before judging its range, even one past the end', async () => {
+    const { request } = setup();
+    const response = await request('/data/tiles.pmtiles', {
+      headers: { Range: 'bytes=5000-', 'If-None-Match': '"etag-tiles.pmtiles"' },
+    });
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get('ETag')).toBe('"etag-tiles.pmtiles"');
+    expect(response.body).toBeNull();
+  });
+
   it('answers HEAD with the headers and the size, and no body', async () => {
     const { request } = setup();
     const response = await request('/data/tiles.pmtiles', { method: 'HEAD' });

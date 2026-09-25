@@ -98,7 +98,9 @@ const plan = [...tilesets, MANIFEST].map((key) => {
 const mb = (bytes) => `${(bytes / 1e6).toFixed(1)} MB`.padStart(9);
 const destination = `${bucket} (${target === '--local' ? 'local simulator' : 'live'})`;
 console.log(`${dryRun ? 'Would publish' : 'Publishing'} to ${destination}, in this order:`);
-for (const { key, size, type } of plan) console.log(`  ${mb(size)}  ${key}  ${type}`);
+for (const { key, file, size, type } of plan) {
+  console.log(`  ${mb(size)}  ${key}  ${type}  ← ${relative(join(web, '..'), file)}`);
+}
 if (dryRun) process.exit(0);
 
 for (const { key, file, type } of plan) {
