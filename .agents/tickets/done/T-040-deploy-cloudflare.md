@@ -159,7 +159,7 @@ need a change, stop and report instead. Also: `web/vite-plugin-serve-data.ts`,
       worker.
 - [x] `docs/deploy.md` covers setup, routine, the version rule, rollback and cost. `CLAUDE.md`
       gains the Deploy row.
-- [ ] Ticket file moved to `.agents/tickets/done/`.
+- [x] Ticket file moved to `.agents/tickets/done/`.
 
 **After merge (human, not part of this ticket's acceptance):** the one-time setup in
 `docs/deploy.md`, then check on the live URL that the basemap and both domains draw, and that
