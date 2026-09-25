@@ -9,14 +9,15 @@ data/
 # --- Python ---
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+# Omit trailing slashes so linked dependency directories are ignored too.
+.venv
+venv
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
 
 # --- Node ---
-node_modules/
+node_modules
 dist/
 .vite/
 *.tsbuildinfo
