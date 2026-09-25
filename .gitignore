@@ -21,6 +21,7 @@ node_modules
 dist/
 .vite/
 *.tsbuildinfo
+.wrangler/
 
 # --- Earth Engine / cloud credentials ---
 .env
