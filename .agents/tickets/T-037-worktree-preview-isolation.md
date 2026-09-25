@@ -28,7 +28,8 @@ that tree is dirty. Any future web ticket delegated to Codex has the same proble
 
 **Files in scope:** `.claude/launch.json`; `CLAUDE.md` (a Gotchas entry stating which tree the
 preview serves and how to verify a branch); optionally a small script under `web/scripts/` if a
-launch entry alone cannot express "start in the directory this config lives in".
+launch entry alone cannot express "start in the directory this config lives in". Plus this
+ticket file.
 
 **Do NOT touch:** `web/src/**` — this is tooling, not app code; `pipeline/**`; any ticket in
 `.agents/tickets/done/`.
