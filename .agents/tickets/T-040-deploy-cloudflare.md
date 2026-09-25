@@ -143,21 +143,21 @@ need a change, stop and report instead. Also: `web/vite-plugin-serve-data.ts`,
 `devDependencies` in `web/package.json`, and the steps of the existing `web` / `pipeline` CI jobs.
 
 **Acceptance criteria:**
-- [ ] `web/worker/index.test.ts` covers every worker rule listed above, and passes.
-- [ ] A missing `/data` key returns a JSON 404; no path under `/data/` can return `index.html`.
-- [ ] `publish-data.mjs` derives its upload list from the manifest and the basemap style, with no
+- [x] `web/worker/index.test.ts` covers every worker rule listed above, and passes.
+- [x] A missing `/data` key returns a JSON 404; no path under `/data/` can return `index.html`.
+- [x] `publish-data.mjs` derives its upload list from the manifest and the basemap style, with no
       domain name or tileset filename written in the script. Tilesets upload before
       `domains.json`, every upload names its target (`--remote` unless `--local`), and
       `--dry-run` uploads nothing.
-- [ ] Under `npm run preview:worker` (real workerd, local R2), the map draws with no console
+- [x] Under `npm run preview:worker` (real workerd, local R2), the map draws with no console
       errors and every `/data` tile read is a 206.
-- [ ] No dependency added: the `dependencies`, `devDependencies` and `package-lock.json` are
+- [x] No dependency added: the `dependencies`, `devDependencies` and `package-lock.json` are
       unchanged.
-- [ ] The `deploy` job runs only on push to `main`, cannot be cancelled by a newer run, and skips
+- [x] The `deploy` job runs only on push to `main`, cannot be cancelled by a newer run, and skips
       with a notice (not a failure) when `CLOUDFLARE_API_TOKEN` is unset.
-- [ ] `npx wrangler@<config.wrangler> deploy --dry-run` accepts `wrangler.json` and bundles the
+- [x] `npx wrangler@<config.wrangler> deploy --dry-run` accepts `wrangler.json` and bundles the
       worker.
-- [ ] `docs/deploy.md` covers setup, routine, the version rule, rollback and cost. `CLAUDE.md`
+- [x] `docs/deploy.md` covers setup, routine, the version rule, rollback and cost. `CLAUDE.md`
       gains the Deploy row.
 - [ ] Ticket file moved to `.agents/tickets/done/`.
 
