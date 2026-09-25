@@ -5,10 +5,11 @@ on:
   push:
     branches: [main]
 
-# A superseded run has nothing left to tell us.
+# A superseded pull-request run has nothing left to tell us. A run on main is never cancelled: it
+# carries the deploy, and cancelling a run cancels every job in it, whatever the job's own group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   web:
@@ -52,3 +53,35 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q
+
+  # Every merge to main goes live — the web app only. The data needs Earth Engine to generate and
+  # CI has no credentials by design, so it is published by hand (docs/deploy.md). CI runs the same
+  # `npm run deploy` a person would, so there is one deploy path and one pinned wrangler.
+  deploy:
+    name: deploy · web app
+    needs: web
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Deploys queue rather than overlap, so the last merge is the one left live.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # Skipped, not failed, until the secrets exist, so main stays green through setup.
+      - if: env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "::notice::Not deployed — CLOUDFLARE_API_TOKEN is not set. See docs/deploy.md."
+      - if: env.CLOUDFLARE_API_TOKEN != ''
+        run: npm run deploy

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "config": {
+    "wrangler": "4.140.0"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
@@ -13,8 +16,11 @@
     "test": "vitest run",
     "check:palette": "node scripts/check-basemap-palette.mjs",
     "preview": "vite preview",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\""
+    "preview:worker": "npm run build && npx --yes wrangler@$npm_package_config_wrangler dev --port 8787",
+    "deploy": "npm run build && npx --yes wrangler@$npm_package_config_wrangler deploy",
+    "publish:data": "node scripts/publish-data.mjs",
+    "format": "prettier --write \"{src,worker}/**/*.{ts,tsx,css,json}\"",
+    "format:check": "prettier --check \"{src,worker}/**/*.{ts,tsx,css,json}\""
   },
   "dependencies": {
     "maplibre-gl": "^5",

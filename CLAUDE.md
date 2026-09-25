@@ -14,6 +14,7 @@ full design and build proposal.
 | Typecheck | — | `npm run typecheck` |
 | Build | `python -m trace_pipeline.cli all` | `npm run build` |
 | Dev | — | `npm run dev` |
+| Deploy | — | `npm run publish:data` (data) · `npm run deploy` (app) — [docs/deploy.md](docs/deploy.md) |
 
 Pipeline runs on Python 3.12 in `pipeline/.venv`. Activate with `source pipeline/.venv/bin/activate`.
 Web runs on the Node version pinned in `web/.nvmrc`. CI reads the same file, so the two can't drift
