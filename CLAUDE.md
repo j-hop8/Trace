@@ -168,3 +168,19 @@ This repo follows the global Claude+Codex standard (~/.claude/CLAUDE.md, ~/.code
 - **Water and forest timelines differ** (1984– vs 2000–). The slider range is per-layer, driven
   by the manifest. Never force a shared range.
 - `data/` is generated and gitignored. Never commit `.pmtiles` or `.tif`.
+- **The `web` preview always serves the main checkout, never a worktree.** The preview harness
+  launches from the session's project root, so `npm run dev --prefix web` resolves to `<repo>/web`
+  whatever worktree the agent believes it is in — a browser check run from a `.worktrees/` checkout
+  silently verifies `main`. To exercise a branch, point `.worktrees/current` at its worktree and
+  start the **`web-worktree`** entry instead:
+
+  ```
+  ln -sfn <T-xxx> .worktrees/current     # the worktree's directory name, not a path
+  ```
+
+  It runs on **5174**, so it coexists with `web` on 5173 — which is how you compare a branch
+  against `main` side by side rather than checking one and trusting the other. The worktree needs
+  its own `web/node_modules` (a symlink to the main checkout's is enough, and is ignored since
+  T-038); a *verify command that moves `node_modules` around* needs a real `npm ci` instead.
+  Confirm which tree you got before trusting a result: the served module's sourcemap `file` field
+  is the absolute path vite resolved.

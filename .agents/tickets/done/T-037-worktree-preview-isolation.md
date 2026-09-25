@@ -35,15 +35,48 @@ ticket file.
 `.agents/tickets/done/`.
 
 **Acceptance criteria:**
-- [ ] With a worktree checked out at a branch that differs from `main` in a `web/src` file,
+- [x] With a worktree checked out at a branch that differs from `main` in a `web/src` file,
       starting the preview and fetching that module over HTTP returns the **branch's** source.
-- [ ] Editing a file in that worktree logs `[vite] hot updated: <path>` in the browser console.
-- [ ] `CLAUDE.md` states plainly which tree the preview serves, so a reviewer who cannot fix it
+- [x] Editing a file in that worktree logs `[vite] hot updated: <path>` in the browser console.
+- [x] `CLAUDE.md` states plainly which tree the preview serves, so a reviewer who cannot fix it
       still knows not to trust a browser check run from a worktree.
-- [ ] If the harness genuinely cannot launch from the worktree, the ticket is closed by
-      *documenting* the detach-and-restore procedure instead — with the dirty-tree caveat stated.
-- [ ] Ticket file moved to `.agents/tickets/done/`.
+- [x] Not needed: this fallback applied only if the harness could not launch from a worktree. It
+      can, so the ticket is closed with a working preview rather than a documented workaround.
+- [x] Ticket file moved to `.agents/tickets/done/`.
 
 **Verify:** `cd web && npm run typecheck && npm test && npm run format:check`, plus the browser
 check above (fetch a changed module from the worktree's preview and confirm it is the branch's).
 **Owner:** claude
+
+**Outcome:** a second launch entry, `web-worktree`, on port 5174:
+
+```json
+{ "name": "web-worktree", "runtimeExecutable": "sh",
+  "runtimeArgs": ["-c",
+    "cd .worktrees/current/web && exec npm run dev -- --port 5174 --strictPort"],
+  "port": 5174 }
+```
+
+The harness launches from the project root, which cannot be changed — so rather than fight it, the
+entry *starts there and walks in*. `.worktrees/current` is a symlink the operator points at the
+worktree being verified (`ln -sfn T-xxx .worktrees/current`), which keeps the launch entry static
+while the target moves. It lives under the already-gitignored `.worktrees/`, so it is never
+committed.
+
+Port 5174 is deliberate: `web` keeps 5173, so a branch and `main` can run **side by side**. That
+is the A/B that made T-035's verdict trustworthy — the same edit crashing on one and not the other
+— and it was only possible there by detaching the main checkout.
+
+**Verified against a probe worktree** whose `MapCanvas.tsx` differed from `main`: the preview on
+5174 served `/Users/jimmy/SideProject/Trace/.worktrees/probe/web/src/map/MapCanvas.tsx`, and
+editing that file logged `[vite] hot updated: /src/map/MapCanvas.tsx` in the browser. Both the
+criteria the old setup failed.
+
+**A marker must survive transformation.** The first probe used a trailing `// comment`, which vite
+strips from the emitted module — `grep` on the response found nothing and it looked as though the
+fix had failed. It had not: the comment was intact in the inline sourcemap, whose `file` field
+carries the absolute path vite resolved. That field is the reliable way to ask which tree is being
+served, and `CLAUDE.md` now says so.
+
+**Incidentally confirmed [[T-038]]:** the probe's symlinked `web/node_modules` did not appear in
+`git status`, which under the old `node_modules/` pattern it would have.
