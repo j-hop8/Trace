@@ -171,20 +171,26 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   selected: null,
 
   setManifest: (manifest) => {
-    // A manifest with no domains is what a partial pipeline run produces. Spreading an empty
-    // array into Math.max yields -Infinity, which would render a slider labelled "-Infinity"
-    // instead of surfacing the real problem.
-    const latest = manifest.domains.reduce(
-      (max, d) => Math.max(max, d.temporal.end),
-      Number.NEGATIVE_INFINITY,
-    );
-
     // Everything on by default: the point of the map is the comparison, and a user who has to
     // switch layers on before seeing anything has to already know what to look for. Except a
     // backdrop: a measured field covers the whole island, so opening on one would open on a map
     // where the comparison the default exists for is drawn over a wash the reader never asked
     // for — and with two, on two washes, neither readable. A backdrop is chosen, never assumed.
     const activeDomains = new Set(manifest.domains.filter((d) => !isBackdrop(d)).map((d) => d.id));
+
+    // The most recent year a domain *on screen* covers — not any domain in the manifest. A backdrop
+    // is off at load, so a field running a year past everything else would open the map on a year
+    // the visible layers have no record of, with the thumb parked at their end while the map asked
+    // for the year after. With nothing active (a manifest of backdrops alone), any domain will do.
+    //
+    // A manifest with no domains is what a partial pipeline run produces. Spreading an empty
+    // array into Math.max yields -Infinity, which would render a slider labelled "-Infinity"
+    // instead of surfacing the real problem.
+    const shown = manifest.domains.filter((d) => activeDomains.has(d.id));
+    const latest = (shown.length > 0 ? shown : manifest.domains).reduce(
+      (max, d) => Math.max(max, d.temporal.end),
+      Number.NEGATIVE_INFINITY,
+    );
 
     set({
       manifest,

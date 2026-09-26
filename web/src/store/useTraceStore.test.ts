@@ -318,6 +318,20 @@ describe('backdrops', () => {
     expect(typesOf('temperature')).toEqual(['level']);
   });
 
+  it('opens on the latest year a domain on screen covers, not a backdrop that is off', () => {
+    // Regression: the opening year was the latest of *every* domain, so a field running past
+    // forest opened the map on a year nothing visible had a record of.
+    useTraceStore.getState().setManifest({
+      version: 4,
+      domains: [
+        { id: 'forest', changeTypes: ['cover'], temporal: { start: 2001, end: 2025 } },
+        { id: 'field', changeTypes: ['level'], measure, temporal: { start: 2001, end: 2026 } },
+      ],
+    } as never);
+    expect(useTraceStore.getState().year).toBe(2025);
+    expect(useTraceStore.getState().renderedYear).toBe(2025);
+  });
+
   it('keeps one backdrop at a time, and leaves the other domains alone', () => {
     useTraceStore.getState().toggleDomain('temperature');
     expect(active()).toEqual(['forest', 'temperature']);

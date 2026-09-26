@@ -103,6 +103,36 @@ def test_a_regions_value_is_the_area_weighted_mean_of_its_cells():
     assert region.means["absolute"] == pytest.approx(21.0, rel=1e-3)
 
 
+def test_a_carried_value_is_averaged_over_the_cells_that_have_it():
+    """Regression: a sum that skipped the gap but divided by both cells halved the value."""
+    frame = grid([[0.1, 0.3]], absolute=[20.0, float("nan")])
+    (region,) = levels.dissolve_grid(frame, "value", (0.5,), carry=("absolute",))
+    assert region.means["absolute"] == pytest.approx(20.0)
+
+
+def test_a_carried_value_missing_everywhere_is_absent_not_zero():
+    frame = grid([[0.1, 0.3]], absolute=[float("nan"), float("nan")])
+    (region,) = levels.dissolve_grid(frame, "value", (0.5,), carry=("absolute",))
+    assert "absolute" not in region.means
+    assert region.means["value"] == pytest.approx(0.2, rel=1e-3)
+
+
+def test_area_does_not_cancel_between_parts_wound_opposite_ways():
+    """Regression: pyproj sums signed rings, so two equal squares wound opposite ways were 0 ha."""
+    from shapely.geometry import MultiPolygon, Polygon
+    from shapely.geometry.polygon import orient
+
+    a = Polygon([(121.0, 24.0), (121.01, 24.0), (121.01, 24.01), (121.0, 24.01)])
+    b = Polygon([(121.02, 24.0), (121.03, 24.0), (121.03, 24.01), (121.02, 24.01)])
+    both = MultiPolygon([orient(a, 1.0), orient(b, -1.0)])
+    assert levels.geodesic_area_ha(both) == pytest.approx(
+        levels.geodesic_area_ha(a) + levels.geodesic_area_ha(b)
+    )
+    # And a hole still subtracts, whichever way it was wound.
+    holed = Polygon(a.exterior.coords, [[(121.002, 24.002), (121.004, 24.002), (121.004, 24.004)]])
+    assert levels.geodesic_area_ha(holed) < levels.geodesic_area_ha(a)
+
+
 def test_an_empty_year_dissolves_to_nothing():
     assert levels.dissolve_grid(grid([[None, None]]), "value", (0.5,)) == []
 

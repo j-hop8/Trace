@@ -48,10 +48,18 @@ def geodesic_area_ha(geometry: Any) -> float:
 
     The same measure `tiles.verify` sums the island tiles with, so a level's `area_ha` and the
     archive's retained-area check are in the same units by construction.
+
+    Oriented first. pyproj sums *signed* ring areas, so a multipolygon whose parts are wound in
+    opposite directions -- which a shapefile, a union and a reprojection are each free to produce
+    -- cancels itself toward zero, and a density divided by that area is off by any factor at
+    all. Exteriors counter-clockwise and holes clockwise make every part add and every hole
+    subtract.
     """
+    import shapely
     from pyproj import Geod
 
-    area_m2, _perimeter = Geod(ellps="WGS84").geometry_area_perimeter(geometry)
+    oriented = shapely.orient_polygons(geometry, exterior_cw=False)
+    area_m2, _perimeter = Geod(ellps="WGS84").geometry_area_perimeter(oriented)
     return abs(area_m2) / config.M2_PER_HA
 
 
@@ -62,7 +70,8 @@ class Region:
     geometry: Any
     band: int
     area_ha: float
-    #: Area-weighted mean of each value column over the region's cells.
+    #: Area-weighted mean of each value column over the region's cells that have one. A carried
+    #: column missing from every cell of the region is absent here -- never a 0.
     means: Mapping[str, float]
     cells: int
 
@@ -93,7 +102,10 @@ def dissolve_grid(
     `cells` holds one row per cell: a square geometry in any projected or geographic CRS (see
     :func:`grid_cells`), the measured value in column `key`, and any further numeric columns
     named in `carry` -- the absolute temperature beside the anomaly, say. A cell whose `key` is
-    missing is left out: a gap in the source is shown as a gap, never filled.
+    missing is left out: a gap in the source is shown as a gap, never filled. A carried value is
+    averaged over the cells that have it, and left out of `means` for a region where none do: a
+    sum that skipped the gaps but divided by every cell would halve a value, and a region with no
+    value would report 0.
 
     Cells are unioned in their own CRS, where neighbours share edges exactly, and only the
     regions are reprojected. Regions are 4-connected: cells meeting at a corner alone are two
@@ -131,9 +143,13 @@ def dissolve_grid(
 
         lonlat = parts.to_crs("EPSG:4326")
         for index, members in owners.groupby("index_right", sort=True):
-            weight = members["_area_ha"]
-            total = float(weight.sum())
-            means = {c: float((members[c] * weight).sum() / total) for c in columns}
+            means: dict[str, float] = {}
+            for column in columns:
+                measured = members[column].notna()
+                weight = members.loc[measured, "_area_ha"]
+                if weight.sum() > 0:
+                    values = members.loc[measured, column]
+                    means[column] = float((values * weight).sum() / weight.sum())
             geometry = lonlat.iloc[int(index)]
             regions.append(
                 Region(

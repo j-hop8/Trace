@@ -206,9 +206,9 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
     """
     problems: list[str] = []
 
-    valid_from = props.get("valid_from")
-    valid_to = props.get("valid_to")
-    if isinstance(valid_from, int) and isinstance(valid_to, int) and valid_to <= valid_from:
+    valid_from = _year(props.get("valid_from"))
+    valid_to = _year(props.get("valid_to"))
+    if valid_from is not None and valid_to is not None and valid_to <= valid_from:
         # Half-open: valid_to is the first year the state no longer holds, so equality is an empty
         # interval -- a state that ended the year it began, which is no state at all.
         problems.append(
@@ -221,7 +221,7 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
     # Schema cannot condition one field on another's `x-kind`.
     change_type = props.get("change_type")
     kind = kind_of().get(change_type) if isinstance(change_type, str) else None
-    if kind == "change" and valid_to is not None:
+    if kind == "change" and props.get("valid_to") is not None:
         problems.append(
             f"{where}: change_type {change_type!r} is a change, and change never closes -- "
             f"valid_to must be null; only a cover feature ends"
@@ -230,10 +230,10 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
     # A level is a value measured over one year: it closes, and it closes the year after it
     # begins. Open-ended, it would claim a temperature for years nobody measured; spanning
     # several, it would stand one number in for years that each had their own.
-    if kind == "level" and isinstance(valid_from, int) and valid_to != valid_from + 1:
+    if kind == "level" and valid_from is not None and valid_to != valid_from + 1:
         problems.append(
             f"{where}: a level holds for exactly one year -- valid_to must be "
-            f"{valid_from + 1} (valid_from + 1), not {valid_to!r}"
+            f"{valid_from + 1} (valid_from + 1), not {props.get('valid_to')!r}"
         )
 
     # The band is what colours a level at every zoom, pooled or not, so a level without one
@@ -247,6 +247,23 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
         )
 
     return problems
+
+
+def _year(value: Any) -> int | None:
+    """A year as the schema admits it, or None.
+
+    JSON Schema's `integer` is a mathematical integer, so `2013.0` passes the schema -- and a
+    rule here that tested `isinstance(value, int)` would silently skip it. A raw export that
+    writes its years as floats has to meet the same ordering and one-year rules as one that
+    writes them as ints. `bool` is an `int` in Python and is never a year.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _describe(error: jsonschema.ValidationError, where: str) -> str:

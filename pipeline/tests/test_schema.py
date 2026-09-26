@@ -265,6 +265,22 @@ def test_a_level_cannot_stay_open_or_span_years(valid_to):
         make_level(valid_to=valid_to)
 
 
+def test_a_year_written_as_a_float_meets_the_same_rules():
+    """JSON Schema's integer admits 2013.0, so a raw export writing floats must not slip past the
+    rules the schema cannot state -- regression: `isinstance(…, int)` skipped them."""
+
+    def problems(**overrides):
+        props = make_level().properties()
+        props.update(overrides)
+        return schema.validate_feature({"type": "Feature", "geometry": SQUARE, "properties": props})
+
+    assert any("exactly one year" in p for p in problems(valid_from=2013.0, valid_to=2015))
+    assert problems(valid_from=2013.0, valid_to=2014.0) == []
+    cover = make_feature().properties() | {"valid_from": 2008.0, "valid_to": 1990.0}
+    found = schema.validate_feature({"type": "Feature", "geometry": SQUARE, "properties": cover})
+    assert any("not after" in p for p in found), found
+
+
 def test_a_level_must_carry_its_band():
     with pytest.raises(schema.FeatureValidationError, match="must carry a band"):
         make_level(band=None)
