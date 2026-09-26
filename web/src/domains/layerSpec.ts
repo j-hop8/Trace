@@ -5,9 +5,9 @@
  * domains exist — everything comes from the entry it is handed, including which layers to build at
  * all. Adding a domain adds a manifest record and nothing else.
  *
- * Colour never appears here as a literal. `styleFor` is the single authority (A2), and because it
- * returns the accessible pattern with the colour, the hatch that keeps loss from being
- * colour-alone (A5) comes along automatically rather than by remembering to add it.
+ * Colour never appears here as a literal. `styleFor` and `rampFor` are the single authority (A2),
+ * and because `styleFor` returns the accessible pattern with the colour, the hatch that keeps loss
+ * from being colour-alone (A5) comes along automatically rather than by remembering to add it.
  */
 
 import type {
@@ -16,8 +16,8 @@ import type {
   LineLayerSpecification,
 } from 'maplibre-gl';
 
-import { styleFor } from '@/domains/colors';
-import { kindsOf } from '@/domains/manifest';
+import { rampFor, styleFor } from '@/domains/colors';
+import { kindsOf, selectableTypes } from '@/domains/manifest';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import { CHANGE_TYPE_ORDER, KIND_OF, KIND_ORDER } from '@/types/feature';
 import type { ChangeType, Kind } from '@/types/feature';
@@ -192,11 +192,20 @@ const isType = (changeType: ChangeType): FilterSpecification =>
   ['==', ['get', 'change_type'], changeType] as FilterSpecification;
 
 /**
- * Which split a state's layers get. Decided by the *kind* — cover ends, change does not — so it
- * is the taxonomy that picks the model, never the domain.
+ * Which split each kind's layers get — the pipeline's `MODEL_OF_KIND`, node for node. A change
+ * never ends, so a cohort per year switches on and stays on. Cover and level both end — a level
+ * the year after it begins — so both need the interval tree. A `Record` over `Kind`, so a new kind
+ * does not compile until someone decides how it is cut.
  */
+const MODEL_OF_KIND: Record<Kind, 'from' | 'interval'> = {
+  change: 'from',
+  cover: 'interval',
+  level: 'interval',
+};
+
+/** Which split a state's layers get. Decided by the *kind*, never the domain. */
 const cohortModelFor = (changeType: ChangeType): 'from' | 'interval' =>
-  KIND_OF[changeType] === 'cover' ? 'interval' : 'from';
+  MODEL_OF_KIND[KIND_OF[changeType]];
 
 /**
  * The width ramp that keeps a sub-pixel patch visible.
@@ -345,8 +354,11 @@ function stateRoles(entry: DomainManifestEntry, changeType: ChangeType): Role[] 
  * nothing here needs to fake them.
  */
 function buildRoles(entry: DomainManifestEntry): Role[] {
-  const present = new Set(entry.changeTypes ?? []);
+  const present = new Set(selectableTypes(entry));
   const roles: Role[] = [];
+
+  if (present.has('level') && entry.measure)
+    roles.push(...levelRoles(entry.measure.breaks.length + 1));
 
   if (present.has('cover')) {
     // The ground state. More opaque than a change fill, which is an accumulation rather than a
@@ -365,12 +377,81 @@ function buildRoles(entry: DomainManifestEntry): Role[] {
   }
 
   for (const changeType of CHANGE_TYPE_ORDER) {
-    if (changeType === 'cover') continue;
+    if (KIND_OF[changeType] !== 'change') continue;
     if (!present.has(changeType)) continue;
     roles.push(...stateRoles(entry, changeType));
   }
 
   return roles;
+}
+
+/**
+ * A colour per band, as the one expression this file lets read a feature.
+ *
+ * `['step', ['get', 'band'], c0, 1, c1, 2, c2, …]`: band 0 takes the first colour, and each break
+ * after it the next. Built once from `rampFor` and set when the layer is added — never passed to
+ * `setPaintProperty` afterwards, which is what keeps it off the reload path.
+ *
+ * That distinction is the whole case for allowing it. MapLibre decides whether a paint write
+ * reloads the source *per property being written*: `setPaintProperty` asks whether that property
+ * was or will be data-driven (`style_layer.ts`), and only then does `style.ts` mark the source for
+ * reload. This app writes nothing after a layer is added but constant opacities
+ * (`opacityChannel` refuses anything else), so a band colour fixed at build time is parsed into
+ * the bucket once, like the filter, and stepping the year still costs one constant write per
+ * layer. The `match` over `change_type` that `stateRoles` retired was a different thing: a colour
+ * the *toggles* rewrote. The one-layer-per-band alternative would have cost `bands × (2N − 1)`
+ * style layers per level domain for the same pixels.
+ */
+function bandColours(ramp: string[]): string {
+  const [first, ...rest] = ramp;
+  return [
+    'step',
+    ['get', 'band'],
+    first,
+    ...rest.flatMap((colour, i) => [i + 1, colour]),
+  ] as unknown as string;
+}
+
+/**
+ * The layers a level owns: its field, and a fine edge between regions.
+ *
+ * The field is the backdrop every other domain is read against, so it is drawn a little short of
+ * opaque — enough to carry its ramp, not so much that the basemap's roads and coastline vanish
+ * under it. The edge is what separates two neighbouring units in the same band (two townships of
+ * the same density) and it is drawn at every zoom: unlike a 30 m patch, a level's region is never
+ * sub-pixel, so there is no mark for the line to stand in for.
+ */
+function levelRoles(bands: number): Role[] {
+  const test = isType('level');
+  return [
+    {
+      key: 'level-fill',
+      changeType: 'level',
+      cohorts: cohortModelFor('level'),
+      test,
+      paint: (e) => ({
+        type: 'fill' as const,
+        paint: {
+          'fill-color': bandColours(rampFor(e.hue, bands).map((style) => style.color)),
+          'fill-opacity': 0.7,
+        },
+      }),
+    },
+    {
+      key: 'level-outline',
+      changeType: 'level',
+      cohorts: cohortModelFor('level'),
+      test,
+      paint: (e) => ({
+        type: 'line' as const,
+        paint: {
+          'line-color': bandColours(rampFor(e.hue, bands).map((style) => style.stroke)),
+          'line-width': 0.6,
+          'line-opacity': 0.6,
+        },
+      }),
+    },
+  ];
 }
 
 /**

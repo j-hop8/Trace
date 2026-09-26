@@ -227,9 +227,99 @@ def test_kind_of_matches_the_schema_taxonomy():
     assert schema.kind_of() == {
         "cover": "cover",
         "gain": "change",
+        "level": "level",
         "loss": "change",
         "stable": "change",
     }
+
+
+# --- the level kind ----------------------------------------------------------------------------
+
+
+def make_level(**overrides):
+    props = {
+        "domain": "temperature",
+        "valid_from": 2013,
+        "valid_to": 2014,
+        "change_type": "level",
+        "metric": {"temp_anomaly_c": 0.62, "area_ha": 12_000.0},
+        "source": "TCCIP",
+        "method": "annual mean minus 1991-2020 normal",
+        "confidence": 0.8,
+        "band": 4,
+    }
+    props.update(overrides)
+    return schema.TraceFeature(**props)
+
+
+def test_a_level_holds_for_one_closed_year():
+    assert make_level().properties()["valid_to"] == 2014
+    schema.validate(schema.feature_collection([make_level().to_geojson_feature(SQUARE)]))
+
+
+@pytest.mark.parametrize("valid_to", [None, 2015, 2020])
+def test_a_level_cannot_stay_open_or_span_years(valid_to):
+    """Open-ended, a level claims a value for years nobody measured; spanning several, it stands
+    one number in for years that each had their own."""
+    with pytest.raises(schema.FeatureValidationError, match="exactly one year"):
+        make_level(valid_to=valid_to)
+
+
+def test_a_year_written_as_a_float_meets_the_same_rules():
+    """JSON Schema's integer admits 2013.0, so a raw export writing floats must not slip past the
+    rules the schema cannot state -- regression: `isinstance(…, int)` skipped them."""
+
+    def problems(**overrides):
+        props = make_level().properties()
+        props.update(overrides)
+        return schema.validate_feature({"type": "Feature", "geometry": SQUARE, "properties": props})
+
+    assert any("exactly one year" in p for p in problems(valid_from=2013.0, valid_to=2015))
+    assert problems(valid_from=2013.0, valid_to=2014.0) == []
+    cover = make_feature().properties() | {"valid_from": 2008.0, "valid_to": 1990.0}
+    found = schema.validate_feature({"type": "Feature", "geometry": SQUARE, "properties": cover})
+    assert any("not after" in p for p in found), found
+
+
+def test_a_level_must_carry_its_band():
+    with pytest.raises(schema.FeatureValidationError, match="must carry a band"):
+        make_level(band=None)
+
+
+def test_band_is_refused_on_every_other_kind():
+    with pytest.raises(schema.FeatureValidationError, match="only for level"):
+        make_feature(band=2)
+    with pytest.raises(schema.FeatureValidationError, match="only for level"):
+        make_feature(change_type="loss", valid_to=None, band=2)
+
+
+def test_band_is_emitted_only_when_set():
+    assert "band" not in make_feature().properties()
+    assert make_level().properties()["band"] == 4
+
+
+def test_a_negative_band_is_refused_by_the_schema():
+    with pytest.raises(schema.FeatureValidationError, match="band"):
+        make_level(band=-1)
+
+
+def test_band_on_a_raw_feature_is_checked_too():
+    """Features that never passed through the dataclass get the same rule from `validate`."""
+    props = make_level().properties()
+    del props["band"]
+    problems = schema.validate_feature({"type": "Feature", "geometry": SQUARE, "properties": props})
+    assert any("must carry a band" in p for p in problems), problems
+
+
+def test_a_level_metric_carries_its_own_key_but_only_numbers():
+    assert make_level().properties()["metric"]["temp_anomaly_c"] == 0.62
+    with pytest.raises(schema.FeatureValidationError, match="metric"):
+        make_level(metric={"temp_anomaly_c": "warm", "area_ha": 1.0})
+
+
+def test_band_is_a_spine_field_so_extra_cannot_smuggle_it():
+    with pytest.raises(schema.FeatureValidationError, match="may not contain spine field"):
+        make_level(extra={"band": 9})
 
 
 def test_subtype_is_omitted_when_absent_rather_than_null():
@@ -303,7 +393,8 @@ def test_change_type_values_match_the_typescript_union():
     schema_kinds = change_type["x-kind"]
     union = re.findall(r"export type ChangeType = ([^;]+);", ts_source)[0]
     ts_values = set(union.replace("'", "").replace(" ", "").split("|"))
-    ts_kinds = dict(re.findall(r"(\w+):\s*'(cover|change)'", ts_source))
+    kinds = "|".join(sorted(set(schema_kinds.values())))
+    ts_kinds = dict(re.findall(rf"(\w+):\s*'({kinds})'", ts_source))
 
     python_values = set(get_args(schema.ChangeType))
 

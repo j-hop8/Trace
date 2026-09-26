@@ -7,7 +7,13 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 
 import type { ChangeType, DomainId, Kind, TraceFeatureProperties } from '@/types/feature';
-import { combinedRange, kindsOf, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
+import {
+  combinedRange,
+  isBackdrop,
+  kindsOf,
+  selectableTypes,
+  selectableTypesByKind,
+} from '@/domains/manifest';
 import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
 
 export interface SelectedFeature {
@@ -165,10 +171,23 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   selected: null,
 
   setManifest: (manifest) => {
+    // Everything on by default: the point of the map is the comparison, and a user who has to
+    // switch layers on before seeing anything has to already know what to look for. Except a
+    // backdrop: a measured field covers the whole island, so opening on one would open on a map
+    // where the comparison the default exists for is drawn over a wash the reader never asked
+    // for — and with two, on two washes, neither readable. A backdrop is chosen, never assumed.
+    const activeDomains = new Set(manifest.domains.filter((d) => !isBackdrop(d)).map((d) => d.id));
+
+    // The most recent year a domain *on screen* covers — not any domain in the manifest. A backdrop
+    // is off at load, so a field running a year past everything else would open the map on a year
+    // the visible layers have no record of, with the thumb parked at their end while the map asked
+    // for the year after. With nothing active (a manifest of backdrops alone), any domain will do.
+    //
     // A manifest with no domains is what a partial pipeline run produces. Spreading an empty
     // array into Math.max yields -Infinity, which would render a slider labelled "-Infinity"
     // instead of surfacing the real problem.
-    const latest = manifest.domains.reduce(
+    const shown = manifest.domains.filter((d) => activeDomains.has(d.id));
+    const latest = (shown.length > 0 ? shown : manifest.domains).reduce(
       (max, d) => Math.max(max, d.temporal.end),
       Number.NEGATIVE_INFINITY,
     );
@@ -179,18 +198,20 @@ export const useTraceStore = create<TraceState>((set, get) => ({
         manifest.domains.length === 0
           ? 'The manifest contains no domains. Re-run the pipeline: cd pipeline && python -m trace_pipeline.cli all'
           : null,
-      // Everything on by default: the point of the map is the comparison, and a user who has to
-      // switch layers on before seeing anything has to already know what to look for.
-      activeDomains: new Set(manifest.domains.map((d) => d.id)),
+      activeDomains,
       // ...showing every state each one carries. Same reasoning one level down: a reader who has to
       // switch forest's canopy on before the losses have anything to be losses *of* has to already
       // know what the map is for. `selectableTypes` is what keeps this honest — a domain is seeded
       // with what its tileset actually holds, never with a fixed list of states.
       selectedTypes: new Map(manifest.domains.map((d) => [d.id, new Set(selectableTypes(d))])),
       // ...and none of it has arrived yet. Not a guess: the layers are deliberately held back until
-      // the basemap has painted, so at this instant every domain is genuinely switched on and
-      // showing nothing. The map clears these kind by kind as each source finishes loading.
-      loadingKinds: new Map(manifest.domains.map((d) => [d.id, new Set(kindsOf(d))])),
+      // the basemap has painted, so at this instant every domain switched on is genuinely showing
+      // nothing. The map clears these kind by kind as each source finishes loading.
+      loadingKinds: new Map(
+        manifest.domains
+          .filter((d) => activeDomains.has(d.id))
+          .map((d) => [d.id, new Set(kindsOf(d))]),
+      ),
       // Start at the most recent year any domain covers, so the first paint shows the present
       // rather than an arbitrary midpoint.
       year: Number.isFinite(latest) ? latest : new Date().getFullYear(),
@@ -208,6 +229,14 @@ export const useTraceStore = create<TraceState>((set, get) => ({
         next.delete(id);
       } else {
         next.add(id);
+        // One backdrop at a time. Two measured fields over the whole island are one wash over
+        // another, and neither can be read; switching one on is choosing it over the other.
+        const entry = state.manifest?.domains.find((domain) => domain.id === id);
+        if (entry && isBackdrop(entry)) {
+          for (const other of state.manifest?.domains ?? []) {
+            if (other.id !== id && isBackdrop(other)) next.delete(other.id);
+          }
+        }
         // A domain goes dark either by this switch or by having its last state un-checked, and it
         // has to come back the same way from both. Without this, a domain switched off from the
         // state chips would return still holding the empty set that switched it off — on, and

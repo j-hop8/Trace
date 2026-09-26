@@ -5,14 +5,15 @@ climate, transport. Every domain implements this same interface, which is what m
 interchangeable modules on one spine rather than bespoke layers.
 
 Adding a domain means: subclass Domain, register it, add a hue to config.DOMAIN_HUES. No change
-to the tiling step, no change to the web app.
+to the tiling step, no change to the web app. `docs/adding-a-domain.md` is the full checklist.
 """
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -30,6 +31,62 @@ class SourceInfo:
     attribution: str
     citation: str
     licence: str
+
+
+@dataclass(frozen=True)
+class ReadoutValue:
+    """One more number the readout quotes beside a level's own -- the absolute °C beside the
+    anomaly, the head count beside the density. A metric key, and how to say it."""
+
+    key: str
+    unit: str
+    label: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class Measure:
+    """What a level domain measures, published so the web can draw its ramp and legend.
+
+    `breaks` are the fixed class boundaries, ascending: `n` breaks make `n + 1` bands, and a value
+    equal to a break belongs to the band above it (`levels.band_of`). They are the same for every
+    year -- a colour has to mean the same thing in 1965 as in 2023, which per-year quantiles would
+    quietly break -- and they are chosen, not fitted, so they belong in `config.py`.
+    """
+
+    #: The metric key the bands are cut from, e.g. `temp_anomaly_c`.
+    key: str
+    unit: str
+    label: Mapping[str, str]
+    breaks: tuple[float, ...]
+    #: What the value is relative to, when it is relative to something ("1991–2020 normal").
+    baseline: str | None = None
+    readout: tuple[ReadoutValue, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if not self.breaks:
+            raise ValueError(f"measure {self.key!r} has no breaks -- one band is no ramp")
+        if not all(math.isfinite(b) for b in self.breaks):
+            raise ValueError(f"measure {self.key!r} has a non-finite break: {self.breaks}")
+        if any(a >= b for a, b in zip(self.breaks, self.breaks[1:], strict=False)):
+            raise ValueError(f"measure {self.key!r} breaks must strictly ascend: {self.breaks}")
+
+    @property
+    def bands(self) -> int:
+        return len(self.breaks) + 1
+
+    def manifest_entry(self) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "key": self.key,
+            "unit": self.unit,
+            "label": dict(self.label),
+            "breaks": list(self.breaks),
+            "readout": [
+                {"key": r.key, "unit": r.unit, "label": dict(r.label)} for r in self.readout
+            ],
+        }
+        if self.baseline is not None:
+            entry["baseline"] = self.baseline
+        return entry
 
 
 class Domain(ABC):
@@ -68,13 +125,24 @@ class Domain(ABC):
 
     @abstractmethod
     def extract(self, aoi: Any) -> dict[str, Any]:
-        """Run the Earth Engine extraction and return a GeoJSON FeatureCollection.
+        """Run the extraction and return a GeoJSON FeatureCollection.
 
         Every feature's properties must satisfy schema/feature.schema.json.
 
         Args:
-            aoi: an ee.Geometry to clip to.
+            aoi: what to clip to -- an ee.Geometry for a domain that `needs_earth_engine`, and
+                the `(west, south, east, north)` bbox tuple for one that reads local files.
         """
+
+    #: Whether extraction runs on Earth Engine. A domain that reads files from
+    #: `extract.RAW_DIR` sets this False, and `trace extract` then neither authenticates to Earth
+    #: Engine for it nor hands it an ee.Geometry -- so it builds on a machine with no Earth
+    #: Engine project at all.
+    needs_earth_engine: bool = True
+
+    #: What a level domain measures -- its unit, labels and fixed class breaks. Required exactly
+    #: when the domain emits `level` features; `manifest._check` refuses one without the other.
+    measure: Measure | None = None
 
     #: Which change types this domain's extraction is *designed* to emit.
     #:
@@ -96,7 +164,7 @@ class Domain(ABC):
         from trace_pipeline.config import DETAIL_ZOOM, DOMAIN_HUES
 
         first, last = self.temporal_range()
-        return {
+        entry: dict[str, Any] = {
             "id": self.id,
             "label": self.label,
             "hue": DOMAIN_HUES[self.id],
@@ -125,6 +193,11 @@ class Domain(ABC):
                 "detailZoom": DETAIL_ZOOM,
             },
         }
+        # Published only when the archive holds levels to draw with it, for the same reason the
+        # states are measured: a legend for a ramp that is not on the map is an aspiration.
+        if self.measure is not None and "level" in change_types:
+            entry["measure"] = self.measure.manifest_entry()
+        return entry
 
 
 _REGISTRY: dict[str, type[Domain]] = {}

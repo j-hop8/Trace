@@ -41,7 +41,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { cohortSourceLayers, layersFor, opacityChannel } from '@/domains/layerSpec';
 import type { DomainManifest, DomainManifestEntry } from '@/domains/manifest';
 import { KIND_OF } from '@/types/feature';
-import type { ChangeType } from '@/types/feature';
+import type { ChangeType, Kind } from '@/types/feature';
 
 const DATA = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../data');
 const MANIFEST = path.join(DATA, 'domains.json');
@@ -187,8 +187,11 @@ const selects = (spec: unknown, features: Feature[], where = 'test'): Set<number
 const roleOf = (id: string, domainId: string) =>
   id.replace(`trace-${domainId}-`, '').replace(/-\d{4}(-\d{4})?$/, '');
 
-/** The plain time semantics a role's cohorts stand in for, by the kind of state it draws. */
-const inYear = (props: Record<string, unknown>, year: number, kind: 'cover' | 'change') => {
+/**
+ * The plain time semantics a role's cohorts stand in for, by the kind of state it draws: a change
+ * holds from its year on; cover and level hold for their own half-open validity.
+ */
+const inYear = (props: Record<string, unknown>, year: number, kind: Kind) => {
   const from = Number(props.valid_from);
   if (kind === 'change') return from <= year;
   const to = props.valid_to == null ? Infinity : Number(props.valid_to);
@@ -276,6 +279,18 @@ describe.each(regimes)(
         }
 
         expect(expiring).toHaveLength(0);
+      },
+    );
+
+    it.skipIf(!runnable)(
+      'gives every level its band, in both regimes, and nothing else one',
+      () => {
+        // The band is what colours a level, and the island copies lose their metric — so a level
+        // without a band here is a region the map paints in the fallback colour at every zoom.
+        for (const f of features) {
+          const isLevel = f.properties.change_type === 'level';
+          expect(Number.isInteger(f.properties.band), `${f.layer} band`).toBe(isLevel);
+        }
       },
     );
 

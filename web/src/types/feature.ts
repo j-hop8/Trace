@@ -7,16 +7,22 @@
  */
 
 /**
- * The universal change signal, identical across every domain.
+ * The universal state signal, identical across every domain.
  *
  * `cover` is not a change: it is the baseline the changes are measured against, carried as a
- * change_type so that one tileset per domain still holds everything the map draws.
+ * change_type so that one tileset per domain still holds everything the map draws. `level` is not
+ * a category at all: it is a measured value held for one year — a temperature, a population
+ * density — drawn by the `band` it falls in.
  */
-export type ChangeType = 'cover' | 'gain' | 'loss' | 'stable';
+export type ChangeType = 'cover' | 'gain' | 'level' | 'loss' | 'stable';
 
-/** The two kinds of state. Cover carries its own validity; change accumulates and never closes. */
-export type Kind = 'cover' | 'change';
+/**
+ * The three kinds of state. Cover carries its own validity; change accumulates and never closes;
+ * level is a value measured over exactly one year.
+ */
+export type Kind = 'level' | 'cover' | 'change';
 export const KIND_OF: Record<ChangeType, Kind> = {
+  level: 'level',
   cover: 'cover',
   stable: 'change',
   gain: 'change',
@@ -24,20 +30,27 @@ export const KIND_OF: Record<ChangeType, Kind> = {
 };
 
 /**
- * The kinds in the order they are drawn, listed and loaded: the ground first, then what happened
- * to it. `CHANGE_TYPE_ORDER` below is this same order one level down.
+ * The kinds in the order they are drawn, listed and loaded: a measured field first, as the
+ * backdrop everything else is read against; then the ground a domain's changes happened to; then
+ * the changes. `CHANGE_TYPE_ORDER` below is this same order one level down.
  */
-export const KIND_ORDER: readonly Kind[] = ['cover', 'change'];
+export const KIND_ORDER: readonly Kind[] = ['level', 'cover', 'change'];
 
 /**
  * Every change type, in the order they should be drawn and listed.
  *
  * Not the union's declaration order, which is alphabetical and meaningless on a map. This runs from
- * the ground state outward: cover first, then what stayed, then what arrived, then what went
- * — so `loss` is drawn last and sits on top of whatever it happened to, and a legend built by
- * walking this reads as a sentence rather than a set.
+ * the ground state outward: a level's field first, cover, then what stayed, then what arrived,
+ * then what went — so `loss` is drawn last and sits on top of whatever it happened to, and a
+ * legend built by walking this reads as a sentence rather than a set.
  */
-export const CHANGE_TYPE_ORDER: readonly ChangeType[] = ['cover', 'stable', 'gain', 'loss'];
+export const CHANGE_TYPE_ORDER: readonly ChangeType[] = [
+  'level',
+  'cover',
+  'stable',
+  'gain',
+  'loss',
+];
 
 /**
  * A domain id. Deliberately `string` rather than a union of 'water' | 'forest': the web app
@@ -46,9 +59,15 @@ export const CHANGE_TYPE_ORDER: readonly ChangeType[] = ['cover', 'stable', 'gai
  */
 export type DomainId = string;
 
+/**
+ * A feature's numbers. `area_ha` and `length_m` are the spine's own; a level carries its measured
+ * value beside them under the key its domain's manifest `measure` names (`temp_anomaly_c`,
+ * `density_per_km2`), which is why the rest are open.
+ */
 export interface FeatureMetric {
   area_ha?: number;
   length_m?: number;
+  [key: string]: number | undefined;
 }
 
 export interface TraceFeatureProperties {
@@ -68,6 +87,13 @@ export interface TraceFeatureProperties {
 
   change_type: ChangeType;
   metric: FeatureMetric;
+
+  /**
+   * Which of the domain's fixed classes a level's value falls in, from 0 at the lowest of the
+   * manifest's `measure.breaks`. Present on level features only, and kept on the pooled island
+   * copies — unlike `metric` — because it is what colours a level at every zoom.
+   */
+  band?: number;
 
   /** Dataset and version this feature came from. */
   source: string;
@@ -113,10 +139,7 @@ export interface TraceFeature {
  * than throwing, so the readout would quietly show "—" for a number the pipeline definitely
  * measured, and nothing would indicate the value had been lost in transit.
  */
-export function readMetric(
-  props: Record<string, unknown>,
-  key: keyof FeatureMetric,
-): number | undefined {
+export function readMetric(props: Record<string, unknown>, key: string): number | undefined {
   // Flattened (`metric.area_ha`) or top-level — cheapest checks first.
   const flat = props[`metric.${key}`] ?? props[key];
   if (typeof flat === 'number') return flat;

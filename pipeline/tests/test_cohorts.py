@@ -170,3 +170,34 @@ def test_partition_yields_one_line_per_copy_in_input_order():
 
     assert [layer for layer, _ in lines] == ["loss:2013", "cover:2001-2013", "cover:2013-2014"]
     assert lines[1][1] is features[1] and lines[2][1] is features[1]
+
+
+# --- level: the interval tree, one year at a time ----------------------------------------------
+
+
+def test_a_level_lands_in_the_leaf_for_its_year():
+    """A level is `[Y, Y + 1)`, which the tree holds in exactly one node: the leaf for Y."""
+    assert FOREST.layers_for({"change_type": "level", "valid_from": 2013, "valid_to": 2014}) == [
+        "level:2013-2014"
+    ]
+
+
+def test_level_layers_are_the_tree_under_their_own_name():
+    """Every node, like cover -- the web builds the same tree for both -- but named for level, so
+    a style layer drawing one kind never reads the other's features."""
+    names = FOREST.all_layers(("level",))
+    assert len(names) == 2 * 25 - 1
+    assert all(name.startswith("level:") for name in names)
+    assert all(FOREST.is_layer(name) for name in names)
+
+
+@pytest.mark.parametrize("name", ["level:2013", "level:2002-2013", "level:2001-2025"])
+def test_a_level_is_never_a_year_cohort_or_a_foreign_node(name):
+    assert not FOREST.is_layer(name)
+
+
+def test_every_kind_the_schema_knows_has_a_cohort_model():
+    """A new kind in the schema is refused here until someone decides how it is cut."""
+    from trace_pipeline import schema
+
+    assert set(schema.kind_of().values()) == set(cohorts.MODEL_OF_KIND)

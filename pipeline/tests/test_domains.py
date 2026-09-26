@@ -100,6 +100,8 @@ def test_manifest_entry_matches_the_web_contract(fake_domain_cls):
     # so the sentence is added once here rather than remembered per domain.
     assert entry["caveat"].startswith(fake_domain_cls().caveat)
     assert entry["caveat"].endswith(tiles.ISLAND_CAVEAT)
+    # A categorical domain measures nothing, so it publishes no ramp.
+    assert "measure" not in entry
 
 
 def test_temporal_range_flows_into_the_manifest(fake_domain_cls):
@@ -140,3 +142,76 @@ def test_registry_reports_known_ids_on_miss(monkeypatch, fake_domain_cls):
 
     with pytest.raises(KeyError, match="water"):
         base.get("coast")
+
+
+# --- measured domains ---------------------------------------------------------------------------
+
+ANOMALY = base.Measure(
+    key="temp_anomaly_c",
+    unit="°C",
+    label={"en": "Temperature anomaly", "zh": "年均溫距平"},
+    breaks=(-1.0, -0.5, 0.0, 0.5, 1.0, 1.5),
+    baseline="1991–2020 normal",
+    readout=(base.ReadoutValue("temp_mean_c", "°C", {"en": "Annual mean", "zh": "年均溫"}),),
+)
+
+
+@pytest.fixture
+def level_domain_cls(fake_domain_cls):
+    class FakeTemperature(fake_domain_cls):
+        id = "temperature"
+        label = {"en": "Temperature", "zh": "氣溫"}
+        needs_earth_engine = False
+        change_types = ("level",)
+        measure = ANOMALY
+
+    return FakeTemperature
+
+
+def test_a_measure_is_published_with_the_levels_it_describes(level_domain_cls):
+    entry = level_domain_cls().manifest_entry("x", ("level",), ("level:1984-1985",))
+    assert entry["measure"] == {
+        "key": "temp_anomaly_c",
+        "unit": "°C",
+        "label": {"en": "Temperature anomaly", "zh": "年均溫距平"},
+        "breaks": [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5],
+        "baseline": "1991–2020 normal",
+        "readout": [
+            {"key": "temp_mean_c", "unit": "°C", "label": {"en": "Annual mean", "zh": "年均溫"}}
+        ],
+    }
+
+
+def test_no_measure_is_published_for_an_archive_without_levels(level_domain_cls):
+    """Measured like the states: a legend for a ramp that is not on the map is an aspiration."""
+    assert "measure" not in level_domain_cls().manifest_entry("x", (), ())
+
+
+def test_a_measure_counts_one_more_band_than_breaks():
+    assert ANOMALY.bands == 7
+
+
+@pytest.mark.parametrize(
+    "breaks,fragment",
+    [
+        ((), "no breaks"),
+        ((0.0, 0.0), "ascend"),
+        ((1.0, 0.5), "ascend"),
+        ((float("nan"),), "finite"),
+    ],
+)
+def test_a_measure_refuses_breaks_that_cannot_class_anything(breaks, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        base.Measure(key="k", unit="u", label={"en": "k", "zh": "k"}, breaks=breaks)
+
+
+def test_the_manifest_refuses_levels_without_a_measure(level_domain_cls, monkeypatch, tmp_path):
+    from trace_pipeline import manifest
+
+    class Unmeasured(level_domain_cls):
+        measure = None
+
+    monkeypatch.setattr(tiles, "pmtiles_path", lambda domain_id: tmp_path / f"{domain_id}.pmtiles")
+    with pytest.raises(manifest.ManifestError, match="declares no `measure`"):
+        manifest.build([Unmeasured()])
+    assert manifest.build([level_domain_cls()])["domains"][0]["measure"]["key"] == "temp_anomaly_c"
