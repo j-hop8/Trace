@@ -285,3 +285,55 @@ describe('toggleKind', () => {
     expect(useTraceStore.getState().activeDomains.has('water')).toBe(true);
   });
 });
+
+/**
+ * Backdrops — measured fields over the whole island, such as a temperature or a density.
+ *
+ * Two things to pin down: that none is on when the map opens, since the default exists for the
+ * comparison of what is drawn over the ground; and that at most one is ever on, since a second
+ * field over the whole island is a wash over a wash.
+ */
+describe('backdrops', () => {
+  const measure = { key: 'v', unit: 'u', label: { en: 'v', zh: 'v' }, breaks: [0], readout: [] };
+  const withBackdrops = {
+    version: 4,
+    domains: [
+      { id: 'forest', changeTypes: ['cover', 'loss'], temporal: { start: 2001, end: 2025 } },
+      { id: 'temperature', changeTypes: ['level'], measure, temporal: { start: 1960, end: 2023 } },
+      { id: 'population', changeTypes: ['level'], measure, temporal: { start: 1975, end: 2024 } },
+    ],
+  } as never;
+
+  const active = () => ids(useTraceStore.getState().activeDomains);
+
+  beforeEach(() => {
+    useTraceStore.getState().setManifest(withBackdrops);
+  });
+
+  it('opens with every backdrop off and every other domain on', () => {
+    expect(active()).toEqual(['forest']);
+    // Not loading, either: a domain that is off has nothing on its way.
+    expect(report()).toEqual({ forest: ['change', 'cover'] });
+    // Still seeded with its state, so switching it on shows it.
+    expect(typesOf('temperature')).toEqual(['level']);
+  });
+
+  it('keeps one backdrop at a time, and leaves the other domains alone', () => {
+    useTraceStore.getState().toggleDomain('temperature');
+    expect(active()).toEqual(['forest', 'temperature']);
+
+    useTraceStore.getState().toggleDomain('population');
+    expect(active()).toEqual(['forest', 'population']);
+
+    useTraceStore.getState().toggleDomain('population');
+    expect(active()).toEqual(['forest']);
+  });
+
+  it('widens the slider’s range to a backdrop’s own years once it is chosen', () => {
+    useTraceStore.getState().toggleDomain('temperature');
+    useTraceStore.getState().setYear(1960);
+    useTraceStore.getState().toggleDomain('population');
+    // Temperature went off with its 1960 start, so the year is held inside what is left.
+    expect(useTraceStore.getState().year).toBe(1975);
+  });
+});

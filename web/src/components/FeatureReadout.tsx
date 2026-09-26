@@ -1,3 +1,7 @@
+import { Fragment } from 'react';
+
+import { bandLabel, formatMeasure, formatValue } from '@/domains/manifest';
+import type { DomainMeasure } from '@/domains/manifest';
 import { useTraceStore } from '@/store/useTraceStore';
 import { KIND_OF, readMetric } from '@/types/feature';
 import type { TraceFeatureProperties } from '@/types/feature';
@@ -30,6 +34,40 @@ function formatArea(hectares: number | undefined): string | null {
  */
 function areaIsMeaningful(props: TraceFeatureProperties): boolean {
   return KIND_OF[props.change_type] === 'change';
+}
+
+/** The extra numbers a level's measure asks the readout to quote, those this feature carries. */
+function readoutRows(props: TraceFeatureProperties, measure: DomainMeasure | undefined) {
+  if (!measure || props.change_type !== 'level' || props.pooled) return [];
+  return measure.readout.flatMap((row) => {
+    const value = readMetric(props as unknown as Record<string, unknown>, row.key);
+    return value === undefined ? [] : [{ ...row, value }];
+  });
+}
+
+/**
+ * A level's sentence: what was measured, when, and what it came to.
+ *
+ * Led by the measured value, with the band it falls in after it — the band is what the colour
+ * says, the value is what the colour cannot. A pooled level is a band and no value: the mark
+ * under the cursor is several regions merged, so the only true statement is the span they share.
+ */
+function levelSentence(
+  props: TraceFeatureProperties,
+  measure: DomainMeasure,
+  detailZoom?: number,
+): string {
+  const subject = `${measure.label.en} in ${props.valid_from}`;
+  const relative = measure.baseline ? `, relative to the ${measure.baseline}` : '';
+  const band = typeof props.band === 'number' ? bandLabel(measure, props.band) : null;
+  const span = band ? `${band} ${measure.unit}` : null;
+  const value = readMetric(props as unknown as Record<string, unknown>, measure.key);
+
+  if (props.pooled || value === undefined) {
+    const zoom = detailZoom === undefined ? 'zoom in' : `zoom in past ${detailZoom}`;
+    return `${subject}: ${span ?? 'no band'}${relative} — regions pooled at this zoom; ${zoom} for the measured value.`;
+  }
+  return `${subject}: ${formatMeasure(measure, value)} ${measure.unit}${relative}${span ? ` (${span})` : ''}.`;
 }
 
 /**
@@ -83,13 +121,16 @@ export default function FeatureReadout() {
   const props = selected.properties;
   const entry = manifest?.domains.find((d) => d.id === props.domain);
   const area = formatArea(readMetric(props as unknown as Record<string, unknown>, 'area_ha'));
+  const measure = entry?.measure;
+  const text =
+    props.change_type === 'level' && measure
+      ? levelSentence(props, measure, entry?.tiles.detailZoom)
+      : sentence(props, area, entry?.tiles.detailZoom);
 
   return (
     <div className="pointer-events-auto w-80 rounded-xl border border-ink-700/80 bg-ink-900/90 p-4 text-sm backdrop-blur">
       <div className="flex items-start justify-between gap-3">
-        <p className="leading-relaxed text-slate-100">
-          {sentence(props, area, entry?.tiles.detailZoom)}
-        </p>
+        <p className="leading-relaxed text-slate-100">{text}</p>
         <button
           type="button"
           onClick={() => select(null)}
@@ -102,7 +143,7 @@ export default function FeatureReadout() {
 
       {/* Say why the number is missing. An absent area otherwise looks like data that failed to
           load, and the reader has no way to tell that from a number deliberately withheld. */}
-      {area && !areaIsMeaningful(props) && !props.pooled && (
+      {area && KIND_OF[props.change_type] === 'cover' && !props.pooled && (
         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
           No area given: cover shapes are cut by the extraction grid and at year boundaries, so one
           shape&rsquo;s size is partly an artefact of where those cuts fell.
@@ -110,6 +151,14 @@ export default function FeatureReadout() {
       )}
 
       <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[11px] text-slate-400">
+        {readoutRows(props, measure).map((row) => (
+          <Fragment key={row.key}>
+            <dt className="text-slate-600">{row.label.en.toLowerCase()}</dt>
+            <dd>
+              {formatValue(row.value)} {row.unit}
+            </dd>
+          </Fragment>
+        ))}
         <dt className="text-slate-600">source</dt>
         <dd className="truncate" title={props.source}>
           {props.source}

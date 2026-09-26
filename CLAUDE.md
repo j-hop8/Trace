@@ -49,6 +49,11 @@ everything from the start of the range to the current year — 2,656 features at
 only style change MapLibre applies without touching tile data. A data-driven paint expression is
 *not* one: MapLibre reloads the source for that too (`style_layer.ts` returns `isDataDriven` from
 `setPaintProperty`, and `style.ts` then reloads), so the year can never be an expression either.
+That decision is made per property *written*, which allows exactly one exception: a level's band
+colour, a `['step', ['get', 'band'], …]` set when the layer is added and never written again. Only
+opacity is ever written after that (`opacityChannel` throws on anything else), and the test scopes
+the exception to level layers reading `band` in colour. Measured in the browser: 10 year steps
+with a level domain on sent nothing to the workers.
 
 The split follows the kind of state ([layerSpec.ts](web/src/domains/layerSpec.ts)):
 
@@ -61,6 +66,8 @@ The split follows the kind of state ([layerSpec.ts](web/src/domains/layerSpec.ts
   the root-to-leaf path through Y, so a step flips at most `2·(depth − 1)` layers per cover role
   — about 10 — whatever the data holds. `layerSpec.test.ts` pins this with MapLibre's own filter
   evaluator; `layerSpec.tiles.test.ts` checks it against every built tileset.
+- **Level roles** use the same tree, as `level:S-E` tile layers. A level holds for exactly one
+  year, so it sits in a leaf, and a step flips one layer off and one on per role.
 
 A fixed filter is not a free one. MapLibre's worker runs every style layer's filter over every
 feature of the **tile layer** the style layer names, so 589 cohort layers reading one tile layer
@@ -103,13 +110,22 @@ to cut holes in it (`cleared-*`). That was the web deriving cover from loss; it 
 [schema/feature.schema.json](schema/feature.schema.json). PostGIS is deferred to Phase 2, but the
 schema is not, so that migration stays a data load rather than a redesign.
 
-### Two kinds of state
+### Three kinds of state
 
 `cover` is the state that exists in year Y and carries its own half-open validity interval
 `[valid_from, valid_to)`; `valid_to` is the first year the state no longer holds, and `null` means
 open. `change` is a verdict accumulated since the record's first year, so `stable`, `gain`, and
 `loss` always carry `valid_to: null` and remain drawn in every later year. Water's change
 features do not yet satisfy this (see the cohort note above); T-031 re-dates them.
+
+`level` is a *measured value* held for one year (a temperature anomaly, a population density):
+always `[Y, Y + 1)`, never open. It carries a top-level `band`, the index of the domain's fixed
+class breaks, which are published once as the manifest's `measure` and are the same for every
+year. The band sits outside `metric` because island pooling strips `metric`, and the band is what
+colours a level at every zoom. The value itself is in `metric` under `measure.key`. A domain that
+holds levels is a **backdrop**: off when the map opens, one at a time, and drawn beneath every
+other domain. [docs/adding-a-domain.md](docs/adding-a-domain.md) is the checklist for a new domain
+of any kind.
 
 ### Colour is a pure function, and hue means the domain
 
@@ -121,7 +137,10 @@ drawn year for cover, the record's first year for change.
 
 **Every state is a transform of the domain's own hue — there is no cross-domain change colour.**
 Cover is the hue itself; `stable` is pulled toward the basemap's grey so it recedes; `gain` is
-lifted toward white; `loss` is the hue emptied almost to black. This replaced a rule where loss in
+lifted toward white; `loss` is the hue emptied almost to black. A level's bands are
+`rampFor(hue, bands)`, a lightness ramp of that same hue (dark → hue → light), so a measured field
+never borrows another domain's colour to express its value. Domain hues sit at least 30° apart
+(`test_domain_hues_sit_apart_on_the_wheel`), and that spacing is the budget new domains draw on. This replaced a rule where loss in
 every domain was one shared red, which reads correctly at two domains and stops scaling at six: a
 shared red says only that *something, somewhere* was lost, and the hue no longer says what. The
 palettes of any two domains are disjoint, and `colors.test.ts` asserts it.

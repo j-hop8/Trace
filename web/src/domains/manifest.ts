@@ -21,6 +21,33 @@ export interface DomainSource {
   licence: string;
 }
 
+/** One further number a level's readout quotes — the absolute °C beside the anomaly. */
+export interface MeasureReadout {
+  /** A key of the feature's `metric`. */
+  key: string;
+  unit: string;
+  label: { en: string; zh: string };
+}
+
+/**
+ * What a level domain measures: the manifest's description of its ramp.
+ *
+ * `breaks` are fixed class boundaries, ascending — `n` breaks make `n + 1` bands, a value on a
+ * break belongs to the band above it, and they are the same for every year, so a colour means the
+ * same thing in 1965 as in 2023. A level feature carries its band; this is what says what the band
+ * *is*.
+ */
+export interface DomainMeasure {
+  /** The metric key the bands are cut from, and the number the readout leads with. */
+  key: string;
+  unit: string;
+  label: { en: string; zh: string };
+  breaks: number[];
+  /** What the value is relative to, when it is relative to something ("1991–2020 normal"). */
+  baseline?: string;
+  readout: MeasureReadout[];
+}
+
 export interface DomainManifestEntry {
   id: DomainId;
   label: { en: string; zh: string };
@@ -47,6 +74,12 @@ export interface DomainManifestEntry {
   source: DomainSource;
   /** The layer's honest limitation, shown in the UI (A5). */
   caveat: string;
+  /**
+   * Present exactly when the tileset holds `level` features: the unit, labels and fixed class
+   * breaks the ramp, the legend and the readout are built from. The pipeline refuses a manifest
+   * with levels and no measure; `selectableTypes` refuses to offer a level without one.
+   */
+  measure?: DomainMeasure;
   tiles: {
     url: string;
     /**
@@ -84,10 +117,11 @@ export interface DomainManifest {
 /**
  * The manifest version this build understands. A bump means the tile contract changed.
  *
+ * 4: a third kind of state, `level`, with `level:S-E` tile layers and a per-domain `measure`.
  * 3: two regimes split at `tiles.detailZoom` -- pooled below it, exact from it up.
  * 2: one tile layer per cohort (`tiles.sourceLayers`) rather than one named for the domain.
  */
-const SUPPORTED_VERSION = 3;
+const SUPPORTED_VERSION = 4;
 
 /** What to tell someone whose manifest is missing. The fix is almost always the first line. */
 const MISSING_MANIFEST_HINT =
@@ -183,6 +217,9 @@ export function coversYear(entry: DomainManifestEntry, year: number): boolean {
  */
 export function selectableTypes(entry: DomainManifestEntry): ChangeType[] {
   const present = new Set(entry.changeTypes ?? []);
+  // A level without its measure has no ramp to be drawn in and no unit to be read in: offering
+  // it would be a toggle onto nothing, which is the one thing this function exists to prevent.
+  if (!entry.measure) present.delete('level');
   return CHANGE_TYPE_ORDER.filter((changeType) => present.has(changeType));
 }
 
@@ -196,7 +233,7 @@ export function selectableTypes(entry: DomainManifestEntry): ChangeType[] {
  * for it, and the toggles draw no group.
  */
 export function selectableTypesByKind(entry: DomainManifestEntry): Record<Kind, ChangeType[]> {
-  const byKind: Record<Kind, ChangeType[]> = { cover: [], change: [] };
+  const byKind: Record<Kind, ChangeType[]> = { level: [], cover: [], change: [] };
   for (const changeType of selectableTypes(entry)) byKind[KIND_OF[changeType]].push(changeType);
   return byKind;
 }
@@ -211,4 +248,67 @@ export function selectableTypesByKind(entry: DomainManifestEntry): Record<Kind, 
 export function kindsOf(entry: DomainManifestEntry): Kind[] {
   const byKind = selectableTypesByKind(entry);
   return KIND_ORDER.filter((kind) => byKind[kind].length > 0);
+}
+
+/**
+ * Whether this domain is a *backdrop*: a measured field covering the whole island, drawn beneath
+ * every other domain and shown one at a time.
+ *
+ * Two fields at once cannot both be read — two full-island washes, one over the other — so the
+ * store keeps at most one backdrop on, and the map slides a backdrop under whatever is already
+ * drawn. Decided by what the tileset holds, never by the domain's id.
+ */
+export function isBackdrop(entry: DomainManifestEntry): boolean {
+  return selectableTypes(entry).includes('level');
+}
+
+/**
+ * The values a band spans, `[from, to)`: `from` is null for the lowest band and `to` for the
+ * highest, which are open-ended. `null` for a band the breaks do not define.
+ */
+export function bandBounds(
+  measure: DomainMeasure,
+  band: number,
+): { from: number | null; to: number | null } | null {
+  if (!Number.isInteger(band) || band < 0 || band > measure.breaks.length) return null;
+  return {
+    from: band === 0 ? null : (measure.breaks[band - 1] ?? null),
+    to: band === measure.breaks.length ? null : (measure.breaks[band] ?? null),
+  };
+}
+
+/**
+ * A number as the legend and the readout write it: a true minus sign, a plus when `signed` — for a
+ * value relative to a baseline, where "+0.5" says "above normal" and "0.5" says only "half a
+ * degree" — and `compact` for the legend's ticks, where "10K" has room and "10,000" does not.
+ */
+export function formatValue(
+  value: number,
+  { signed = false, compact = false }: { signed?: boolean; compact?: boolean } = {},
+): string {
+  const text = Math.abs(value).toLocaleString('en', {
+    maximumFractionDigits: 2,
+    notation: compact ? 'compact' : 'standard',
+  });
+  const sign = value < 0 ? '−' : signed && value > 0 ? '+' : '';
+  return `${sign}${text}`;
+}
+
+/** A value of this measure, signed exactly when the measure is relative to a baseline. */
+export function formatMeasure(
+  measure: DomainMeasure,
+  value: number,
+  { compact = false }: { compact?: boolean } = {},
+): string {
+  return formatValue(value, { signed: Boolean(measure.baseline), compact });
+}
+
+/** A band's span in words, `[from, to)`: "< −1", "−1 – −0.5", "≥ 1.5". Units are the caller's. */
+export function bandLabel(measure: DomainMeasure, band: number): string | null {
+  const bounds = bandBounds(measure, band);
+  if (!bounds) return null;
+  if (bounds.from === null)
+    return bounds.to === null ? null : `< ${formatMeasure(measure, bounds.to)}`;
+  if (bounds.to === null) return `≥ ${formatMeasure(measure, bounds.from)}`;
+  return `${formatMeasure(measure, bounds.from)} – ${formatMeasure(measure, bounds.to)}`;
 }

@@ -173,6 +173,29 @@ def test_manifest_version_names_the_level_kind():
     assert config.MANIFEST_VERSION == 4
 
 
+#: How far apart on the colour wheel any two domain hues must sit. Hue is the one channel that
+#: says which domain a mark belongs to, and every state is a lighter or darker version of it, so
+#: two hues closer than this blur into one domain at the ends of their ramps. It is also the
+#: budget: the wheel holds about a dozen domains at this spacing, and a new one has to find room.
+MIN_HUE_SEPARATION_DEG = 30
+
+
+def _hue_deg(hex_colour: str) -> float:
+    import colorsys
+
+    r, g, b = (int(hex_colour[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    return colorsys.rgb_to_hls(r, g, b)[0] * 360
+
+
+def test_domain_hues_sit_apart_on_the_wheel():
+    hues = {domain: _hue_deg(hue) for domain, hue in config.DOMAIN_HUES.items()}
+    for a, ha in hues.items():
+        for b, hb in hues.items():
+            if a < b:
+                gap = min(abs(ha - hb), 360 - abs(ha - hb))
+                assert gap >= MIN_HUE_SEPARATION_DEG, f"{a} and {b} are {gap:.0f}° apart"
+
+
 def test_level_domains_have_hues_apart_from_water_and_forest():
     """Blue and green mean water and forest; a measured layer may not borrow either."""
     hues = {config.DOMAIN_HUES[d] for d in ("temperature", "population")}
