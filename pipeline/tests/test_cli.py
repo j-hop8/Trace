@@ -95,3 +95,54 @@ def test_registered_domain_appears_in_listing(capsys, monkeypatch):
     assert "forest" in out
     assert "2000-2025" in out
     assert "Hansen GFC" in out
+
+
+def _local_domain(record):
+    class FakeLocal(base.Domain):
+        id = "population"
+        label = {"en": "Population", "zh": "人口"}
+        needs_earth_engine = False
+
+        @property
+        def source(self):
+            return base.SourceInfo(
+                name="MOI registry",
+                version="2024",
+                attribution="內政部",
+                citation="-",
+                licence="OGDL-Taiwan-1.0",
+            )
+
+        @property
+        def caveat(self):
+            return "Registered population."
+
+        def temporal_range(self):
+            return (2000, 2024)
+
+        def extract(self, aoi):
+            record.append(aoi)
+            return {"type": "FeatureCollection", "features": []}
+
+    return FakeLocal
+
+
+def test_a_local_domain_extracts_without_earth_engine(monkeypatch):
+    """A domain that reads files must build on a machine with no Earth Engine project, so
+    neither `initialize` nor an ee.Geometry may be reached for it."""
+    from trace_pipeline import config, extract
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("Earth Engine was initialised for a local-file domain")
+
+    monkeypatch.setattr(extract, "initialize", refuse)
+    monkeypatch.setattr(config, "bbox_to_ee_geometry", refuse)
+    written = []
+    monkeypatch.setattr(extract, "write_features", lambda d, f: written.append(d) or d)
+
+    aois: list = []
+    base.register(_local_domain(aois))
+
+    assert cli.main(["extract"]) == 0
+    assert written == ["population"]
+    assert aois == [config.TAIWAN_BBOX]

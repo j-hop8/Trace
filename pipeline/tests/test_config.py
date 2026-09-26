@@ -168,6 +168,13 @@ def test_pooling_size_stays_where_tippecanoe_says_it_is_artefact_free():
     assert 2 <= config.TINY_POLYGON_SIZE <= 6
 
 
-def test_manifest_version_names_the_two_regimes():
-    """The web refuses any other version, and reads `tiles.detailZoom` only from this one on."""
-    assert config.MANIFEST_VERSION == 3
+def test_manifest_version_names_the_level_kind():
+    """The web refuses any other version, and reads `measure` and `level:*` layers from 4 on."""
+    assert config.MANIFEST_VERSION == 4
+
+
+def test_level_domains_have_hues_apart_from_water_and_forest():
+    """Blue and green mean water and forest; a measured layer may not borrow either."""
+    hues = {config.DOMAIN_HUES[d] for d in ("temperature", "population")}
+    assert len(hues) == 2
+    assert not hues & {config.DOMAIN_HUES["water"], config.DOMAIN_HUES["forest"]}

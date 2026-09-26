@@ -24,8 +24,8 @@ import jsonschema
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "schema" / "feature.schema.json"
 
-ChangeType = Literal["cover", "gain", "loss", "stable"]
-Kind = Literal["cover", "change"]
+ChangeType = Literal["cover", "gain", "level", "loss", "stable"]
+Kind = Literal["cover", "change", "level"]
 
 #: How many individual problems to name before truncating. A malformed export can produce tens of
 #: thousands of identical errors; the first handful plus a count is what actually helps.
@@ -123,6 +123,9 @@ class TraceFeature:
     method: str
     confidence: float
     subtype: str | None = None
+    #: The class a level feature's value falls in, from 0 at the lowest of the domain's fixed
+    #: breaks. Required on a level feature and forbidden on any other (`_check_properties`).
+    band: int | None = None
     id: str | int | None = None
     #: Domain-specific extras the spine does not define — e.g. water's GSW transition class.
     #: Keys colliding with a spine field are rejected in ``__post_init__``; see
@@ -171,6 +174,10 @@ class TraceFeature:
         # placeholder on every forest patch would be noise in every tile.
         if self.subtype is not None:
             props["subtype"] = self.subtype
+        # Likewise band: it exists only on the level kind, and a null on every other feature
+        # would be one more attribute in every island group for nothing.
+        if self.band is not None:
+            props["band"] = self.band
         return props
 
     def to_geojson_feature(self, geometry: Mapping[str, Any]) -> dict[str, Any]:
@@ -213,14 +220,30 @@ def _check_properties(props: Mapping[str, Any], where: str) -> list[str]:
     # change-kind feature never closes. Cover is the kind that ends. Enforced here because JSON
     # Schema cannot condition one field on another's `x-kind`.
     change_type = props.get("change_type")
-    if (
-        isinstance(change_type, str)
-        and kind_of().get(change_type) == "change"
-        and valid_to is not None
-    ):
+    kind = kind_of().get(change_type) if isinstance(change_type, str) else None
+    if kind == "change" and valid_to is not None:
         problems.append(
             f"{where}: change_type {change_type!r} is a change, and change never closes -- "
             f"valid_to must be null; only a cover feature ends"
+        )
+
+    # A level is a value measured over one year: it closes, and it closes the year after it
+    # begins. Open-ended, it would claim a temperature for years nobody measured; spanning
+    # several, it would stand one number in for years that each had their own.
+    if kind == "level" and isinstance(valid_from, int) and valid_to != valid_from + 1:
+        problems.append(
+            f"{where}: a level holds for exactly one year -- valid_to must be "
+            f"{valid_from + 1} (valid_from + 1), not {valid_to!r}"
+        )
+
+    # The band is what colours a level at every zoom, pooled or not, so a level without one
+    # cannot be drawn; and on any other kind it would be a class nobody's breaks define.
+    has_band = props.get("band") is not None
+    if kind == "level" and not has_band:
+        problems.append(f"{where}: a level feature must carry a band -- the class it is drawn in")
+    if kind is not None and kind != "level" and has_band:
+        problems.append(
+            f"{where}: band is only for level features, not change_type {change_type!r}"
         )
 
     return problems
