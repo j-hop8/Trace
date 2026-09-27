@@ -8,6 +8,7 @@ through the same code water and forest do. It needs tippecanoe and is skipped wh
 
 import json
 import shutil
+import subprocess
 
 import geopandas as gpd
 import pytest
@@ -215,15 +216,30 @@ class SyntheticGrid(base.Domain):
     not all(shutil.which(t) for t in ("tippecanoe", "tippecanoe-decode", "pmtiles")),
     reason="building an archive needs tippecanoe, tippecanoe-decode and pmtiles",
 )
-def test_a_measured_domain_goes_through_the_whole_pipeline(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("max_zoom", [tiles.MAX_ZOOM, config.DETAIL_ZOOM])
+def test_a_measured_domain_goes_through_the_whole_pipeline(tmp_path, monkeypatch, capsys, max_zoom):
     monkeypatch.setattr(extract, "DATA_DIR", tmp_path)
     domain = SyntheticGrid()
+    domain.max_zoom = max_zoom
 
     written = extract.run(domain, config.TAIWAN_BBOX)
     features = json.loads(written.read_text())["features"]
     assert {f["properties"]["change_type"] for f in features} == {"level"}
 
     archive = tiles.build(domain)
+
+    header = json.loads(
+        subprocess.run(
+            [tiles.require_pmtiles(), "show", str(archive), "--header-json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    assert header["maxzoom"] == max_zoom
+    assert tiles.detail_copies_in(archive) == len(features)
+    for zoom in range(max_zoom + 1, tiles.MAX_ZOOM + 1):
+        assert not list(tiles.decoded_features(archive, zoom))
 
     layers = tiles.source_layers_in(archive)
     assert layers and all(layer.startswith("level:") for layer in layers)

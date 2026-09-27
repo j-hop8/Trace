@@ -16,6 +16,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from trace_pipeline import tiles
+
 
 @dataclass(frozen=True)
 class SourceInfo:
@@ -140,6 +142,11 @@ class Domain(ABC):
     #: Engine project at all.
     needs_earth_engine: bool = True
 
+    #: Deepest tile zoom the source's resolution supports. Coarse grids or admin polygons can
+    #: stop earlier and let the map overzoom; at least `config.DETAIL_ZOOM` is required so every
+    #: feature can still be counted in the detail regime by `tiles.verify`.
+    max_zoom: int = tiles.MAX_ZOOM
+
     #: What a level domain measures -- its unit, labels and fixed class breaks. Required exactly
     #: when the domain emits `level` features; `manifest._check` refuses one without the other.
     measure: Measure | None = None
@@ -160,7 +167,6 @@ class Domain(ABC):
         Concrete by design -- the manifest shape is a contract with the web app, so subclasses
         supply the parts and this assembles them uniformly.
         """
-        from trace_pipeline import tiles
         from trace_pipeline.config import DETAIL_ZOOM, DOMAIN_HUES
 
         first, last = self.temporal_range()
