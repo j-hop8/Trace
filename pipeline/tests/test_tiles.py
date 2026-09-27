@@ -74,6 +74,66 @@ def test_missing_geojson_points_at_the_extraction_step(monkeypatch, tmp_path, fo
         tiles.build(forest_domain)
 
 
+# --- the domain's zoom ceiling ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("max_zoom", [config.DETAIL_ZOOM - 1, tiles.MAX_ZOOM + 1, 11.5, "11", None])
+def test_invalid_max_zoom_is_refused_before_tippecanoe(
+    max_zoom, tmp_path, monkeypatch, forest_domain
+):
+    monkeypatch.setattr(extract, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(forest_domain, "max_zoom", max_zoom)
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("tippecanoe ran despite an invalid max_zoom")
+
+    monkeypatch.setattr(tiles.subprocess, "run", must_not_run)
+
+    with pytest.raises(tiles.TilingError, match="max_zoom must be an integer between"):
+        tiles.build(forest_domain)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("domain_id", ["water", "forest"])
+def test_existing_domains_keep_the_same_tippecanoe_command(domain_id, tmp_path, monkeypatch):
+    domain = base.get(domain_id)
+    assert domain.max_zoom == 14
+    # Water normally resolves its range through Earth Engine; this test needs only the command.
+    monkeypatch.setattr(domain, "temporal_range", lambda: (2001, 2025))
+    monkeypatch.setattr(extract, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tiles.shutil, "which", lambda name: f"/bin/{name}")
+    extract.geojson_path(domain_id).write_text(
+        json.dumps({"type": "FeatureCollection", "features": [loss(2013)]})
+    )
+
+    def capture_command(command, **_kwargs):
+        # Pin every flag and its order to the pre-max_zoom build, including the default 14.
+        assert command == [
+            "/bin/tippecanoe",
+            "--output",
+            str(tmp_path / f"{domain_id}.partial.pmtiles"),
+            "--layer",
+            domain_id,
+            "--minimum-zoom",
+            "5",
+            "--maximum-zoom",
+            "14",
+            "--simplification=4",
+            "--no-feature-limit",
+            "--no-tile-size-limit",
+            "--coalesce",
+            "--reorder",
+            "--tiny-polygon-size=6",
+            "--force",
+            str(tmp_path / f"{domain_id}.partial.ndjson"),
+        ]
+        return SimpleNamespace(returncode=1, stdout="", stderr="command captured")
+
+    monkeypatch.setattr(tiles.subprocess, "run", capture_command)
+    with pytest.raises(tiles.TilingError, match="command captured"):
+        tiles.build(domain)
+
+
 # --- the staging filename ---------------------------------------------------------------------
 
 

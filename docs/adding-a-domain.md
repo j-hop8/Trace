@@ -36,6 +36,11 @@ import it in `domains/__init__.py`.
 - **`needs_earth_engine`**: set it `False` for a domain that reads local files. `trace extract`
   then never authenticates for it and passes it the `(west, south, east, north)` bbox tuple, not
   an `ee.Geometry`.
+- **`max_zoom`**: the deepest tile zoom the source's resolution supports, defaulting to
+  `tiles.MAX_ZOOM` (14). Coarse grids or township polygons can stop at `config.DETAIL_ZOOM`
+  (11), avoiding deeper tiles that only re-cut the same shapes; MapLibre overzooms the last
+  level. `tiles.build` requires an integer in `[config.DETAIL_ZOOM, tiles.MAX_ZOOM]`, so the
+  detail regime still exists for verification. Water and forest keep the default.
 - **`extract()`**: returns a FeatureCollection whose every feature satisfies
   `schema/feature.schema.json`. Build features through `schema.TraceFeature`, or through
   `levels.level_feature` for a level, so a bad one fails at the line that built it.

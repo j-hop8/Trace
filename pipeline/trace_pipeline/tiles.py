@@ -284,6 +284,15 @@ def require_detail_floor() -> None:
 
 def build(domain: Domain) -> Path:
     """Build `data/<domain>.pmtiles`. Returns the path written."""
+    if (
+        not isinstance(domain.max_zoom, int)
+        or not config.DETAIL_ZOOM <= domain.max_zoom <= MAX_ZOOM
+    ):
+        raise TilingError(
+            f"{domain.id}: max_zoom must be an integer between {config.DETAIL_ZOOM} and "
+            f"{MAX_ZOOM}, got {domain.max_zoom!r}. The detail regime must exist for verification."
+        )
+
     tippecanoe = require_tippecanoe()
     # Checked up front, not after a 40-second tiling run, so a missing tool fails immediately.
     require_pmtiles()
@@ -325,7 +334,7 @@ def build(domain: Domain) -> Path:
         "--minimum-zoom",
         str(MIN_ZOOM),
         "--maximum-zoom",
-        str(MAX_ZOOM),
+        str(domain.max_zoom),
         f"--simplification={SIMPLIFICATION}",
         *NO_LOSS_FLAGS,
         *POOLING_FLAGS,
