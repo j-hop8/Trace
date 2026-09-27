@@ -1,7 +1,8 @@
 # T-039: `codex-delegate` only links deps at the repo root, so Trace worktrees get none
 **Goal:** Make the delegation helper link (or install) dependencies wherever a repo actually keeps
 them, and tell Codex which paths it must not touch — so a delegated ticket's Verify command can
-run at all.
+run at all, and so that when it runs it **tests the worktree's code rather than the main
+checkout's**.
 
 **⚠️ Scope is outside this repository.** The file is `~/.local/bin/codex-delegate`, global
 tooling shared by every repo on this machine. It cannot be changed by a Trace PR and `/ship` does
@@ -35,8 +36,52 @@ would mutate the human's main checkout. `$DEPS_NOTE` is the only thing standing 
 that, which is why an empty note is worse than no link at all. Consider linking read-only, or
 installing into the worktree instead.
 
+**A linked `pipeline/.venv` tests the wrong code — found delegating T-045 (2026-09-27).**
+Linking the venv is not enough, and done naively it is worse than no venv: the Verify command
+passes against code that is not the ticket's.
+
+- `pipeline/.venv` holds an *editable install of the main checkout*.
+  `__editable___trace_pipeline_0_1_0_finder.py` maps `trace_pipeline` to
+  `/Users/jimmy/SideProject/Trace/pipeline/trace_pipeline`, whichever directory the venv is
+  reached from.
+- Plain `pytest` starts with `sys.path[0]` set to the venv's `bin/`, so the worktree's own
+  `pipeline/` is not on the path and `import trace_pipeline` falls through to the editable
+  finder, which loads the **main checkout's** code. Measured in the T-045 worktree: a bare import
+  resolved to `…/Trace/pipeline/trace_pipeline`; `python -m pytest` run from the worktree's
+  `pipeline/` resolved to `…/.worktrees/T-045/pipeline/trace_pipeline`.
+- The failure is silent. Codex's tests import unchanged code, pass, and the ticket's change is
+  never exercised.
+- **`PYTHONPATH` fixes it for every invocation**, plain `pytest` included. setuptools *appends*
+  its editable finder to `sys.meta_path`, after the normal path search, so an entry on
+  `PYTHONPATH` wins. Verified: with `PYTHONPATH` pointing at a copy of the package, the copy was
+  imported and the editable mapping was ignored.
+- A second quiet skip: `tippecanoe`, `tippecanoe-decode` and `pmtiles` live in
+  `/opt/homebrew/bin`, which a non-interactive shell may not have on `PATH`. The archive-building
+  tests `skipif` without them, so Verify goes green having built nothing.
+
+T-045 was delegated by hand around both. The venv was symlinked, the ticket's Verify became
+`cd pipeline && PATH="/opt/homebrew/bin:$PATH" .venv/bin/python -m pytest -rs`, and an
+Environment section told Codex why. That works for one ticket, but it depends on every future
+ticket author remembering it.
+
+**Suggested shape for the venv:** when the helper links a `.venv`, also run Codex with
+`PYTHONPATH` set to the directory holding the linked package (for Trace, `$wt/pipeline`), and
+put `/opt/homebrew/bin` on its `PATH` when it exists. Before handing over, check that the
+worktree's venv imports the package from inside the worktree (`python -c 'import trace_pipeline;
+print(trace_pipeline.__file__)'` run from outside it) and refuse to start Codex if it does not.
+Say all of this in `$DEPS_NOTE`.
+
+**Cleanup is safe, as measured:** `gh pr merge --delete-branch` removed the T-045 worktree
+directory itself, symlink included, and the main checkout's venv survived intact (342 tests
+passed on `main` after). `git worktree remove` then reports "not a working tree", which is
+harmless.
+
 **Related:** a linked `node_modules` is also not ignored by Trace's `.gitignore` ([[T-038]]), and
-linking is *not* why a worktree's dev server serves the wrong tree ([[T-037]]).
+linking is *not* why a worktree's dev server serves the wrong tree ([[T-037]]). T-037's trap is
+this one's twin: there the *preview* resolved to the main checkout, here the *tests* do. Both
+pass while checking the wrong code. The manual steps in the `/delegate` skill have the same gap,
+but `~/.claude/skills/**` is outside this ticket; fix it there separately once the helper is
+right.
 
 **Files in scope:** `~/.local/bin/codex-delegate` (`link_deps`, and the `DEPS_NOTE` assembly);
 this ticket file.
@@ -50,9 +95,16 @@ other than moving this ticket to `done/`.
 - [ ] `$DEPS_NOTE` names every linked path, so Codex's prompt says which directories are shared.
 - [ ] A repo that does keep deps at the root still works unchanged.
 - [ ] A dry run on Trace ends with a worktree where `cd web && npm test` passes immediately.
+- [ ] In that worktree, under the environment Codex is given, **plain** `pytest` imports
+      `trace_pipeline` from the worktree, not the main checkout. Check it by printing
+      `trace_pipeline.__file__`, not by a green run.
+- [ ] The helper refuses to start Codex when that import check fails.
+- [ ] Under the same environment, `pytest -rs` in `pipeline/` skips nothing that needs
+      tippecanoe or pmtiles.
 - [ ] Ticket file moved to `.agents/tickets/done/`.
 
 **Verify:** from a clean Trace checkout, `codex-delegate --local <a throwaway ticket>` produces a
 worktree in which `cd web && npm run typecheck && npm test && npm run format:check` passes with no
-manual dependency setup.
+manual dependency setup, and in which `cd pipeline && pytest -rs` passes with every
+tippecanoe-dependent test run and `trace_pipeline.__file__` pointing inside the worktree.
 **Owner:** claude
