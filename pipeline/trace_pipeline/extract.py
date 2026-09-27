@@ -1,4 +1,7 @@
-"""Shared Earth Engine plumbing: authenticate, pull vectors down, write validated GeoJSON.
+"""Shared extraction plumbing: authenticate, pull vectors down, write validated GeoJSON.
+
+Most of this is Earth Engine's. A domain that reads local files (`Domain.needs_earth_engine`
+False) shares only the last step, `write_features`, and its raw inputs live under `RAW_DIR`.
 
 **Why no Export tasks.** The obvious way to get Taiwan-scale vectors out of Earth Engine is
 ``Export.table.toDrive``, but that needs write scope on Drive or Cloud Storage and turns a
@@ -22,6 +25,11 @@ if TYPE_CHECKING:
     from trace_pipeline.domains.base import Domain
 
 DATA_DIR = schema.REPO_ROOT / "data"
+
+#: Where local-file domains find their downloaded sources, one directory per domain. Under
+#: `data/`, so it is gitignored with everything else the pipeline reads or writes; the file names
+#: inside it are constants in `config.py`, like the Earth Engine asset IDs.
+RAW_DIR = DATA_DIR / "raw"
 
 #: Cloud project registered for Earth Engine. Not committed -- see pipeline/.env.
 PROJECT_ENV_VAR = "TRACE_EE_PROJECT"
@@ -128,7 +136,8 @@ def write_features(domain_id: str, features: list[dict[str, Any]]) -> Path:
 
 def run(domain: Domain, aoi: Any) -> Path:
     """Extract one domain and write its GeoJSON. Called by `trace extract`."""
-    initialize()
+    if domain.needs_earth_engine:
+        initialize()
 
     print(f"[{domain.id}] extracting…", flush=True)
     collection = domain.extract(aoi)

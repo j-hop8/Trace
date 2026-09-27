@@ -14,7 +14,12 @@
  * claims each year" is a property of the filters, not of the ids.
  */
 
-import { featureFilter } from '@maplibre/maplibre-gl-style-spec';
+import {
+  Color,
+  createPropertyExpression,
+  featureFilter,
+  latest,
+} from '@maplibre/maplibre-gl-style-spec';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -34,6 +39,7 @@ import {
   stageReady,
   stagesFor,
 } from '@/domains/layerSpec';
+import { rampFor } from '@/domains/colors';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import type { ChangeType, Kind } from '@/types/feature';
 
@@ -84,6 +90,38 @@ const water: DomainManifestEntry = {
   tiles: { url: 'pmtiles:///data/water.pmtiles', sourceLayers: [], detailZoom: 11 },
 };
 water.tiles.sourceLayers = cohortSourceLayers(water);
+
+/**
+ * A measured domain: a level over 1960–2023, one year per feature, so the archive holds only the
+ * interval tree's leaves — which is what `sourceLayers` lists, as the pipeline would.
+ */
+const temperature: DomainManifestEntry = {
+  id: 'temperature',
+  label: { en: 'Temperature', zh: '氣溫' },
+  hue: '#dc2626',
+  changeTypes: ['level'],
+  temporal: { start: 1960, end: 2023 },
+  source: {
+    name: 'TCCIP',
+    version: '1 km',
+    attribution: 'TCCIP',
+    citation: '-',
+    licence: '-',
+  },
+  caveat: 'A 1 km grid interpolated from stations.',
+  measure: {
+    key: 'temp_anomaly_c',
+    unit: '°C',
+    label: { en: 'Temperature anomaly', zh: '年均溫距平' },
+    breaks: [-1, -0.5, 0, 0.5, 1, 1.5],
+    baseline: '1991–2020 normal',
+    readout: [],
+  },
+  tiles: { url: 'pmtiles:///data/temperature.pmtiles', sourceLayers: [], detailZoom: 11 },
+};
+temperature.tiles.sourceLayers = intervalNodes(temperature)
+  .filter((node) => node.end - node.start === 1)
+  .map((node) => sourceLayerFor('level', node));
 
 /** A domain with change and no cover at all — the case the cover machinery must stay out of. */
 const changeOnly: DomainManifestEntry = { ...water, changeTypes: ['gain', 'loss', 'stable'] };
@@ -619,17 +657,104 @@ describe('which toggle shows which layer', () => {
   });
 });
 
-describe('paint never reads a feature', () => {
-  it('carries no data-driven colour or opacity, in either domain', () => {
+describe('paint reads a feature only where it can never be rewritten', () => {
+  it('carries no data-driven colour or opacity on any categorical layer', () => {
     // Colour used to be a `match` over `change_type` shared by every change state — the last
-    // data-driven paint property in the hot path, and exactly the class of style that makes
-    // MapLibre re-read tile data. And the obvious way to honour `valid_to` — a data-driven
-    // opacity per step — is the same reload in different clothes. A `step` on zoom is still
-    // allowed, because zoom is not a feature.
+    // data-driven paint property in the hot path, and one the toggles rewrote, which is the class
+    // of write that makes MapLibre re-read tile data. And the obvious way to honour `valid_to` — a
+    // data-driven opacity per step — is the same reload in different clothes. A `step` on zoom is
+    // still allowed, because zoom is not a feature.
     for (const e of [entry, water]) {
       for (const layer of layersFor(e, 2013, all(e))) {
         expect(JSON.stringify(layer.paint)).not.toContain('"get"');
       }
     }
+  });
+
+  it('lets a level read its band in colour, and nothing else anywhere', () => {
+    // The one exception, and its limits. A band colour is fixed when the layer is added and never
+    // written again — MapLibre reloads per property *written*, and only opacity ever is — so it is
+    // parsed into the bucket once, like the filter. Opacity must stay a constant: it is the
+    // channel every year step writes.
+    for (const layer of layersFor(temperature, 2013, all(temperature))) {
+      const paint = layer.paint as Record<string, unknown>;
+      for (const [property, value] of Object.entries(paint)) {
+        const text = JSON.stringify(value);
+        if (property === 'fill-color' || property === 'line-color') {
+          expect(text.replaceAll('["get","band"]', '')).not.toContain('"get"');
+        } else {
+          expect({ property, text }).toEqual({ property, text: text.replace(/"get"/g, 'x') });
+        }
+      }
+      expect(typeof opacityOf(layer)).toBe('number');
+    }
+  });
+});
+
+describe('levels', () => {
+  const layers = () => layersFor(temperature, 2013, all(temperature));
+
+  it('draws a fill and an edge per node the archive holds, and nothing else', () => {
+    const roles = new Set(layerIdsFor(temperature).map((id) => roleOf(id, temperature)));
+    expect([...roles]).toEqual(['level-fill', 'level-outline']);
+    // One year per feature: the archive holds the leaves, so that is all that is built.
+    expect(layerIdsFor(temperature)).toHaveLength(2 * 64);
+  });
+
+  it('reads the level tile layer of its own year', () => {
+    for (const layer of layers()) {
+      const sourceLayer = (layer as { 'source-layer': string })['source-layer'];
+      expect(sourceLayer).toMatch(/^level:\d{4}-\d{4}$/);
+      expect(layer.id.endsWith(sourceLayer.replace('level:', ''))).toBe(true);
+    }
+  });
+
+  it('shows exactly one year’s layers, and steps by two writes per role', () => {
+    const shown = layers().filter((layer) => opacityOf(layer) > 0);
+    expect(shown.map((l) => l.id).sort()).toEqual([
+      'trace-temperature-level-fill-2013-2014',
+      'trace-temperature-level-outline-2013-2014',
+    ]);
+
+    const before = new Map(opacityUpdatesFor(temperature, 2013).map(([id, , o]) => [id, o]));
+    const changed = opacityUpdatesFor(temperature, 2014).filter(
+      ([id, , o]) => before.get(id) !== o,
+    );
+    expect(changed).toHaveLength(4); // one leaf off and one on, per role
+  });
+
+  it('colours each band by MapLibre’s own evaluation exactly as the ramp says', () => {
+    // Evaluated, not string-matched: this is the expression the worker will run per feature.
+    const fill = layers()[0]!;
+    const value = (fill.paint as Record<string, unknown>)['fill-color'];
+    const parsed = createPropertyExpression(
+      value,
+      'fill-color',
+      latest.paint_fill['fill-color'] as never,
+    );
+    if (parsed.result !== 'success') throw new Error('band colour did not parse');
+
+    const ramp = rampFor(temperature.hue, 7);
+    ramp.forEach((style, band) => {
+      const colour = parsed.value.evaluate(
+        { zoom: 8 } as never,
+        {
+          type: 3,
+          properties: { band },
+        } as never,
+      ) as Color;
+      expect(colour.toString()).toBe(Color.parse(style.color)!.toString());
+    });
+  });
+
+  it('goes on first, as the backdrop every other kind is drawn over', () => {
+    const both: DomainManifestEntry = { ...temperature, changeTypes: ['cover', 'level'] };
+    expect(stagesFor(both, 2013, all(both)).map((stage) => stage.kind)).toEqual(['level', 'cover']);
+    expect(stageReady('level', [entry, both], () => false)).toBe(true);
+  });
+
+  it('builds nothing for a level whose measure is missing', () => {
+    const { measure: _omitted, ...unmeasured } = temperature;
+    expect(layerIdsFor(unmeasured)).toEqual([]);
   });
 });

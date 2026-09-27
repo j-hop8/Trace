@@ -126,6 +126,15 @@ def _check(entries: Sequence[dict[str, Any]]) -> None:
                 f"  python -m trace_pipeline.cli tiles {domain_id}"
             )
 
+        # A level is drawn by its band, and the band means nothing without the breaks, unit and
+        # label that `measure` carries: the web would have a ramp with no legend and a readout
+        # with no unit. The domain declares the measure; this is where forgetting it surfaces.
+        if "level" in (entry.get("changeTypes") or []) and not entry.get("measure"):
+            raise ManifestError(
+                f"{domain_id}: the tiles hold level features but the domain declares no "
+                f"`measure` -- set Domain.measure (unit, label, breaks)"
+            )
+
         # Attribution is a licence obligation and the web app has no other source for it, so an
         # empty string here would silently drop a required credit.
         if not (entry.get("source") or {}).get("attribution"):

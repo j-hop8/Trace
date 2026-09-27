@@ -288,15 +288,22 @@ TINY_POLYGON_SIZE: Final[int] = 6
 DETAIL_FLOOR_MARGIN: Final[float] = 1.5
 
 # --- Output -----------------------------------------------------------------------------------
+# 4: a third kind of state, `level`, with `level:S-E` tile layers and a per-domain `measure`.
 # 3: two regimes split at `tiles.detailZoom` -- pooled below it, exact from it up (T-036).
 # 2: one tile layer per cohort (`tiles.sourceLayers`) rather than one named for the domain.
-MANIFEST_VERSION: Final[int] = 3
+MANIFEST_VERSION: Final[int] = 4
 
-# Domain identity hues (A2). Extent = domain hue; loss = the universal change signal, which lives
-# in the web app's colors.ts because it is cross-domain by definition.
+# Domain identity hues (A2). Hue names the domain, and every state -- cover, change, a level's
+# whole ramp -- is a transform of it in the web's colors.ts. The budget is small and spent with
+# care: the basemap is drawn without blue or green so those can mean water and forest, which is
+# also why rainfall cannot simply be blue or NDVI green (docs/adding-a-domain.md). Temperature
+# takes the heat red the proposal set aside for climate; population takes gold. Level domains are
+# shown one at a time, so their two ramps never share the screen.
 DOMAIN_HUES: Final[dict[str, str]] = {
     "water": "#2563eb",
     "forest": "#15803d",
+    "temperature": "#dc2626",
+    "population": "#eab308",
 }
 
 

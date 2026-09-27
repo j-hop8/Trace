@@ -13,7 +13,7 @@ import {
   stageFor,
   stageReady,
 } from '@/domains/layerSpec';
-import { kindsOf } from '@/domains/manifest';
+import { isBackdrop, kindsOf } from '@/domains/manifest';
 import type { DomainManifestEntry } from '@/domains/manifest';
 import { useTraceStore } from '@/store/useTraceStore';
 import type { DomainId, Kind, TraceFeatureProperties } from '@/types/feature';
@@ -212,7 +212,7 @@ export function useDomainLayers(map: maplibregl.Map | null) {
       map.addSource(stage.sourceId, stage.source);
       // Computed once: each layer goes in before the same neighbour, so the stage keeps its own
       // order and lands directly after the domain's earlier stages.
-      const beforeId = beforeIdFor(map, entry);
+      const beforeId = beforeIdFor(map, entry, manifest.domains);
       for (const layer of stage.layers) map.addLayer(layer, beforeId);
     };
 
@@ -584,8 +584,16 @@ export function useDomainLayers(map: maplibregl.Map | null) {
  * of everything, and the cover layer is a near-solid mass — it covered every place name in the
  * central range, so the reader could see the forest and not where it was. The label layer is
  * found by type rather than by id so it survives a basemap whose label layer is renamed.
+ *
+ * A backdrop's first layer goes lower still: beneath every other domain already drawn. It is
+ * switched on after the map has opened — never by default — so "under the labels" would put the
+ * field over the forest and water it exists to be read behind.
  */
-function beforeIdFor(map: maplibregl.Map, entry: DomainManifestEntry): string | undefined {
+function beforeIdFor(
+  map: maplibregl.Map,
+  entry: DomainManifestEntry,
+  domains: readonly DomainManifestEntry[],
+): string | undefined {
   const order = map.getLayersOrder();
   const own = new Set(layerIdsFor(entry));
 
@@ -595,6 +603,12 @@ function beforeIdFor(map: maplibregl.Map, entry: DomainManifestEntry): string | 
   });
   // `undefined` when the domain's last layer is the map's last: append.
   if (last >= 0) return order[last + 1];
+
+  if (isBackdrop(entry)) {
+    const others = new Set(domains.filter((d) => d.id !== entry.id).flatMap(layerIdsFor));
+    const beneath = order.find((id) => others.has(id));
+    if (beneath) return beneath;
+  }
 
   return order.find((id) => map.getLayer(id)?.type === 'symbol');
 }

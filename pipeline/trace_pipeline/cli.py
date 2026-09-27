@@ -49,15 +49,22 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     from trace_pipeline import extract
 
-    # Before the AOI, not after. ee.Geometry.Rectangle is a server-side call under the hood, so it
-    # needs an initialized client too -- building the AOI first failed the whole command with
-    # "Earth Engine client library not initialized" before any domain was even reached.
-    # `initialize` is idempotent, so `extract.run` calling it again costs nothing.
-    extract.initialize()
+    selected = [domain_registry.get(domain_id) for domain_id in ids]
 
-    aoi = config.bbox_to_ee_geometry(config.TAIWAN_BBOX)
-    for domain_id in ids:
-        extract.run(domain_registry.get(domain_id), aoi)
+    # Earth Engine only when a selected domain runs on it: a domain that reads local files must
+    # build on a machine with no Earth Engine project, and authenticating for it would make
+    # that impossible for no reason.
+    aoi = None
+    if any(domain.needs_earth_engine for domain in selected):
+        # Before the AOI, not after. ee.Geometry.Rectangle is a server-side call under the hood,
+        # so it needs an initialized client too -- building the AOI first failed the whole command
+        # with "Earth Engine client library not initialized" before any domain was even reached.
+        # `initialize` is idempotent, so `extract.run` calling it again costs nothing.
+        extract.initialize()
+        aoi = config.bbox_to_ee_geometry(config.TAIWAN_BBOX)
+
+    for domain in selected:
+        extract.run(domain, aoi if domain.needs_earth_engine else config.TAIWAN_BBOX)
     return 0
 
 
@@ -117,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_list)
 
     for name, help_text, func in (
-        ("extract", "run Earth Engine extraction", cmd_extract),
+        ("extract", "extract features (Earth Engine or local files)", cmd_extract),
         ("tiles", "build PMTiles from extracted GeoJSON", cmd_tiles),
     ):
         sub = subparsers.add_parser(name, help=help_text)

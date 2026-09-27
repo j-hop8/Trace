@@ -100,7 +100,45 @@ export function styleFor(hue: string, changeType: ChangeType): FeatureStyle {
       const edge = mix(hue, PAPER, 0.45);
       return { color: mix(hue, INK, 0.55), mark: edge, stroke: edge, pattern: 'hatch' };
     }
+    // A level is drawn band by band from `rampFor`; this is the ramp's midpoint — the hue itself —
+    // for anything that needs one colour to stand for the whole field.
+    case 'level': {
+      return { color: hue, mark: hue, stroke: mix(hue, INK, 0.25), pattern: null };
+    }
   }
+}
+
+/**
+ * How far the ramp runs toward black at its low end and toward white at its high end.
+ *
+ * Bounded short of either so every band keeps enough of the hue to say which domain it is: the
+ * darkest band must still read as *this* red on a near-black ground, and the lightest as *this*
+ * red rather than as a pale neutral that could belong to anything.
+ */
+const RAMP_DEPTH = 0.55;
+const RAMP_HEIGHT = 0.55;
+
+/**
+ * The colour of every band of a level domain, lowest band first.
+ *
+ * A lightness ramp of the one hue: the lowest band is the hue pulled toward black, the highest
+ * toward white, and the hue itself sits in the middle. Lightness is the only channel spent on the
+ * value, because hue is spent on the domain — a temperature ramp from blue to red would say
+ * "water" at its cold end. So, like every other state, a band is a transform of the domain's hue
+ * and nothing else, and a level's palette is disjoint from every other domain's by construction.
+ *
+ * Ordered dark → light because the ground is near-black: the highest values stand out from it
+ * the most, and the lowest recede into it. No band carries a pattern — a level has no "gone" to
+ * mark.
+ */
+export function rampFor(hue: string, bands: number): FeatureStyle[] {
+  return Array.from({ length: bands }, (_, band) => {
+    // -1 at the lowest band, +1 at the highest, 0 for a single band.
+    const t = bands === 1 ? 0 : (2 * band) / (bands - 1) - 1;
+    const color =
+      t < 0 ? mix(hue, INK, -t * RAMP_DEPTH) : t > 0 ? mix(hue, PAPER, t * RAMP_HEIGHT) : hue;
+    return { color, mark: color, stroke: mix(color, INK, 0.3), pattern: null };
+  });
 }
 
 /**

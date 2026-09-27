@@ -1,12 +1,20 @@
-import { styleFor } from '@/domains/colors';
+import { rampFor, styleFor } from '@/domains/colors';
 import type { FeatureStyle } from '@/domains/colors';
-import { coversYear, kindsOf, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
-import type { DomainManifestEntry } from '@/domains/manifest';
+import {
+  bandLabel,
+  coversYear,
+  formatMeasure,
+  kindsOf,
+  selectableTypes,
+  selectableTypesByKind,
+} from '@/domains/manifest';
+import type { DomainManifestEntry, DomainMeasure } from '@/domains/manifest';
 import { useTraceStore } from '@/store/useTraceStore';
+import { KIND_ORDER } from '@/types/feature';
 import type { ChangeType, Kind } from '@/types/feature';
 
 /**
- * The two kinds of state, and what each one is compared against.
+ * The kinds of state, and what each one is compared against.
  *
  * This is the line the control was missing. A chip's colour says *which* state; nothing said what
  * that state was measured against — and cover and change have different answers. Cover is what
@@ -26,6 +34,16 @@ const KIND_LABELS: Record<
     gloss: (ctx: { year: number; start: number; inRange: boolean }) => { zh: string; en: string };
   }
 > = {
+  // A level is compared against nothing but its own scale — the legend beside it says what the
+  // bands are, and a baseline, when there is one, is part of the measure's own label.
+  level: {
+    zh: '數值',
+    en: 'value',
+    gloss: ({ year, inRange }) =>
+      inRange
+        ? { zh: `${year}年的量測值`, en: `measured in ${year}` }
+        : { zh: '此年無紀錄', en: 'no record for this year' },
+  },
   cover: {
     zh: '範圍',
     en: 'cover',
@@ -56,6 +74,11 @@ const TYPE_LABELS: Record<
   ChangeType,
   { zh: string; en: string; gloss: { zh: string; en: string } }
 > = {
+  level: {
+    zh: '數值',
+    en: 'value',
+    gloss: { zh: '該年量測的數值', en: 'the value measured that year' },
+  },
   cover: { zh: '範圍', en: 'cover', gloss: { zh: '該年存在的範圍', en: 'what existed that year' } },
   stable: {
     zh: '穩定',
@@ -102,6 +125,105 @@ function Swatch({ style: featureStyle }: { style: FeatureStyle }) {
         />
       )}
     </span>
+  );
+}
+
+/**
+ * A level's legend: one swatch per band, lowest first, with the breaks between them.
+ *
+ * The same rule as the chips — the swatches are the colours the map draws, from the same
+ * `rampFor` — so the legend can never disagree with the field. Ticks sit on the boundaries
+ * because that is what a break is; each swatch's own span is on its tooltip, in full.
+ */
+function Ramp({ domain, measure }: { domain: DomainManifestEntry; measure: DomainMeasure }) {
+  const ramp = rampFor(domain.hue, measure.breaks.length + 1);
+
+  return (
+    <div className="flex items-end gap-1.5">
+      <div className="flex flex-col gap-0.5">
+        <div className="flex">
+          {ramp.map((style, band) => (
+            <span
+              key={band}
+              title={`${bandLabel(measure, band)} ${measure.unit}`}
+              className="h-2 w-6 first:rounded-l-sm last:rounded-r-sm"
+              style={{ backgroundColor: style.color }}
+            />
+          ))}
+        </div>
+        <div className="relative h-3">
+          {measure.breaks.map((value, i) => (
+            <span
+              key={value}
+              className="absolute -translate-x-1/2 font-mono text-[9px] leading-none text-slate-500"
+              style={{ left: `${((i + 1) / ramp.length) * 100}%` }}
+            >
+              {formatMeasure(measure, value, { compact: true })}
+            </span>
+          ))}
+        </div>
+      </div>
+      <span className="pb-3 text-[10px] text-slate-500">{measure.unit}</span>
+    </div>
+  );
+}
+
+/**
+ * A level's row: what is measured and against what, then its ramp.
+ *
+ * No chips: a level has one state, and the switch for it is the heading, as a kind's heading is
+ * everywhere else. What would have been chips is the legend, which a field needs and a category
+ * does not.
+ */
+function LevelGroup({
+  domain,
+  measure,
+  year,
+  selected,
+  loading,
+  onToggleKind,
+}: {
+  domain: DomainManifestEntry;
+  measure: DomainMeasure;
+  year: number;
+  selected: ReadonlySet<ChangeType>;
+  loading: boolean;
+  onToggleKind: () => void;
+}) {
+  const on = selected.has('level');
+  const gloss = KIND_LABELS.level.gloss({
+    year,
+    start: domain.temporal.start,
+    inRange: coversYear(domain, year),
+  });
+
+  return (
+    <div
+      role="group"
+      aria-label={`${domain.label.zh} ${measure.label.zh}`}
+      className="flex flex-col gap-1"
+    >
+      <button
+        type="button"
+        onClick={onToggleKind}
+        aria-pressed={on}
+        title={`${domain.label.zh}：${measure.label.zh} — ${gloss.en}${measure.baseline ? `, relative to the ${measure.baseline}` : ''}`}
+        className="flex flex-wrap items-baseline gap-x-1.5 self-start text-[10px] leading-tight text-slate-500 transition hover:text-slate-300"
+      >
+        <span className={on ? 'text-slate-400' : ''}>{measure.label.zh}</span>
+        <span aria-hidden>·</span>
+        <span>{gloss.zh}</span>
+        {measure.baseline && <span>（相對 {measure.baseline}）</span>}
+        {loading && (
+          <span className="animate-pulse rounded bg-ink-800/80 px-1 py-px text-[9px] text-slate-400">
+            載入中
+          </span>
+        )}
+      </button>
+      <span className={on ? '' : 'opacity-40'}>
+        <Ramp domain={domain} measure={measure} />
+      </span>
+    </div>
   );
 }
 
@@ -299,18 +421,33 @@ export default function LayerToggles() {
                 aria-label={`${domain.label.zh} 圖層`}
                 className="flex flex-col gap-1.5 pl-3"
               >
-                {(Object.keys(KIND_LABELS) as Kind[]).map((kind) => (
-                  <KindGroup
-                    key={kind}
-                    domain={domain}
-                    kind={kind}
-                    year={year}
-                    selected={selected}
-                    loading={!loading && missing !== undefined && missing.has(kind)}
-                    onToggleType={(changeType) => toggleChangeType(domain.id, changeType)}
-                    onToggleKind={() => toggleKind(domain.id, kind)}
-                  />
-                ))}
+                {KIND_ORDER.map((kind) =>
+                  kind === 'level' ? (
+                    domain.measure &&
+                    kinds.includes('level') && (
+                      <LevelGroup
+                        key={kind}
+                        domain={domain}
+                        measure={domain.measure}
+                        year={year}
+                        selected={selected}
+                        loading={!loading && missing !== undefined && missing.has(kind)}
+                        onToggleKind={() => toggleKind(domain.id, kind)}
+                      />
+                    )
+                  ) : (
+                    <KindGroup
+                      key={kind}
+                      domain={domain}
+                      kind={kind}
+                      year={year}
+                      selected={selected}
+                      loading={!loading && missing !== undefined && missing.has(kind)}
+                      onToggleType={(changeType) => toggleChangeType(domain.id, changeType)}
+                      onToggleKind={() => toggleKind(domain.id, kind)}
+                    />
+                  ),
+                )}
               </div>
             )}
           </li>

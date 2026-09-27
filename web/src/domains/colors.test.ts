@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { styleFor } from '@/domains/colors';
+import { rampFor, styleFor } from '@/domains/colors';
 import { CHANGE_TYPE_ORDER } from '@/types/feature';
 
 const FOREST = '#15803d';
@@ -145,5 +145,61 @@ describe('a malformed hue', () => {
 
   it('falls back to the input rather than to a colour from another domain', () => {
     expect(styleFor('not-a-colour', 'loss').color).toBe('not-a-colour');
+  });
+});
+
+/**
+ * A level's ramp: a measured value in lightness alone, because hue is already spent on the domain.
+ */
+describe('a level ramp', () => {
+  const TEMPERATURE = '#dc2626';
+  const POPULATION = '#eab308';
+
+  /** HSL hue angle in degrees, to show a band is still its domain's colour. */
+  const hueOf = (hex: string) => {
+    const [r, g, b] = channels(hex).map((c) => c / 255) as [number, number, number];
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    if (d === 0) return NaN;
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+
+  it('gives one colour per band, lightest for the highest', () => {
+    for (const bands of [2, 7, 8]) {
+      const lights = rampFor(TEMPERATURE, bands).map((style) => luminance(style.color));
+      expect(lights).toHaveLength(bands);
+      for (let i = 1; i < lights.length; i += 1) expect(lights[i]).toBeGreaterThan(lights[i - 1]!);
+    }
+  });
+
+  it('keeps every band its domain’s hue, with the hue itself in the middle', () => {
+    const ramp = rampFor(TEMPERATURE, 7);
+    expect(ramp[3]!.color).toBe(TEMPERATURE);
+    for (const style of ramp)
+      expect(Math.abs(hueOf(style.color) - hueOf(TEMPERATURE))).toBeLessThan(3);
+  });
+
+  it('shares no colour with another domain’s ramp or states', () => {
+    const palette = (hue: string) =>
+      new Set([
+        ...rampFor(hue, 8).flatMap((style) => [style.color, style.stroke]),
+        ...CHANGE_TYPE_ORDER.flatMap((changeType) => {
+          const style = styleFor(hue, changeType);
+          return [style.color, style.mark, style.stroke];
+        }),
+      ]);
+    const hues = [FOREST, WATER, TEMPERATURE, POPULATION];
+    for (const a of hues) {
+      for (const b of hues) {
+        if (a === b) continue;
+        const theirs = palette(b);
+        expect([...palette(a)].filter((colour) => theirs.has(colour))).toEqual([]);
+      }
+    }
+  });
+
+  it('marks nothing with a pattern — a level has no "gone" to signal', () => {
+    expect(rampFor(POPULATION, 8).every((style) => style.pattern === null)).toBe(true);
   });
 });

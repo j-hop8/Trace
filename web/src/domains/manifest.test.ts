@@ -8,8 +8,17 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { kindsOf, selectableTypes, selectableTypesByKind } from '@/domains/manifest';
-import type { DomainManifestEntry } from '@/domains/manifest';
+import {
+  bandBounds,
+  bandLabel,
+  formatMeasure,
+  formatValue,
+  isBackdrop,
+  kindsOf,
+  selectableTypes,
+  selectableTypesByKind,
+} from '@/domains/manifest';
+import type { DomainManifestEntry, DomainMeasure } from '@/domains/manifest';
 
 const entry = (changeTypes?: DomainManifestEntry['changeTypes']): DomainManifestEntry => ({
   id: 'x',
@@ -26,6 +35,7 @@ const entry = (changeTypes?: DomainManifestEntry['changeTypes']): DomainManifest
 describe('selectableTypesByKind', () => {
   it('puts cover on one side and every change on the other', () => {
     expect(selectableTypesByKind(entry(['stable', 'loss', 'cover', 'gain']))).toEqual({
+      level: [],
       cover: ['cover'],
       change: ['stable', 'gain', 'loss'],
     });
@@ -46,7 +56,7 @@ describe('selectableTypesByKind', () => {
   });
 
   it('is empty on both sides for a manifest that never said what it holds', () => {
-    expect(selectableTypesByKind(entry(undefined))).toEqual({ cover: [], change: [] });
+    expect(selectableTypesByKind(entry(undefined))).toEqual({ level: [], cover: [], change: [] });
   });
 });
 
@@ -65,5 +75,57 @@ describe('kindsOf', () => {
 
   it('is empty for a manifest that never said what it holds', () => {
     expect(kindsOf(entry(undefined))).toEqual([]);
+  });
+});
+
+/**
+ * Levels — measured values, which need their `measure` to be drawn or read at all.
+ */
+const anomaly: DomainMeasure = {
+  key: 'temp_anomaly_c',
+  unit: '°C',
+  label: { en: 'Temperature anomaly', zh: '年均溫距平' },
+  breaks: [-1, -0.5, 0, 0.5, 1, 1.5],
+  baseline: '1991–2020 normal',
+  readout: [],
+};
+const density: DomainMeasure = {
+  key: 'density_per_km2',
+  unit: 'people/km²',
+  label: { en: 'Population density', zh: '人口密度' },
+  breaks: [10, 30, 100, 300, 1000, 3000, 10000],
+  readout: [],
+};
+
+describe('levels', () => {
+  it('offers a level only with the measure that says how to draw it', () => {
+    expect(selectableTypes(entry(['level']))).toEqual([]);
+    expect(selectableTypes({ ...entry(['level']), measure: anomaly })).toEqual(['level']);
+  });
+
+  it('is the first kind, and the one that makes a domain a backdrop', () => {
+    const measured = { ...entry(['level', 'cover']), measure: anomaly };
+    expect(kindsOf(measured)).toEqual(['level', 'cover']);
+    expect(isBackdrop(measured)).toBe(true);
+    expect(isBackdrop(entry(['cover', 'loss']))).toBe(false);
+    expect(isBackdrop(entry(['level']))).toBe(false); // no measure, nothing drawn
+  });
+
+  it('spans a band half-open, with the lowest and highest open-ended', () => {
+    expect(bandBounds(anomaly, 0)).toEqual({ from: null, to: -1 });
+    expect(bandBounds(anomaly, 3)).toEqual({ from: 0, to: 0.5 });
+    expect(bandBounds(anomaly, 6)).toEqual({ from: 1.5, to: null });
+    expect(bandBounds(anomaly, 7)).toBeNull();
+    expect(bandBounds(anomaly, -1)).toBeNull();
+  });
+
+  it('writes a relative measure signed, and an absolute one plain', () => {
+    expect(bandLabel(anomaly, 0)).toBe('< −1');
+    expect(bandLabel(anomaly, 4)).toBe('+0.5 – +1');
+    expect(bandLabel(anomaly, 6)).toBe('≥ +1.5');
+    expect(bandLabel(density, 5)).toBe('1,000 – 3,000');
+    expect(formatMeasure(anomaly, 0)).toBe('0');
+    expect(formatMeasure(density, 10000, { compact: true })).toBe('10K');
+    expect(formatValue(23.456)).toBe('23.46');
   });
 });
