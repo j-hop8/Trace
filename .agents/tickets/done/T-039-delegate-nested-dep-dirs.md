@@ -90,21 +90,50 @@ this ticket file.
 other than moving this ticket to `done/`.
 
 **Acceptance criteria:**
-- [ ] Running `codex-delegate` on Trace links `web/node_modules` and, when present,
+- [x] Running `codex-delegate` on Trace links `web/node_modules` and, when present,
       `pipeline/.venv` into the worktree without manual help.
-- [ ] `$DEPS_NOTE` names every linked path, so Codex's prompt says which directories are shared.
-- [ ] A repo that does keep deps at the root still works unchanged.
-- [ ] A dry run on Trace ends with a worktree where `cd web && npm test` passes immediately.
-- [ ] In that worktree, under the environment Codex is given, **plain** `pytest` imports
+- [x] `$DEPS_NOTE` names every linked path, so Codex's prompt says which directories are shared.
+- [x] A repo that does keep deps at the root still works unchanged.
+- [x] A dry run on Trace ends with a worktree where `cd web && npm test` passes immediately.
+- [x] In that worktree, under the environment Codex is given, **plain** `pytest` imports
       `trace_pipeline` from the worktree, not the main checkout. Check it by printing
       `trace_pipeline.__file__`, not by a green run.
-- [ ] The helper refuses to start Codex when that import check fails.
-- [ ] Under the same environment, `pytest -rs` in `pipeline/` skips nothing that needs
+- [x] The helper refuses to start Codex when that import check fails.
+- [x] Under the same environment, `pytest -rs` in `pipeline/` skips nothing that needs
       tippecanoe or pmtiles.
-- [ ] Ticket file moved to `.agents/tickets/done/`.
+- [x] Ticket file moved to `.agents/tickets/done/`.
 
 **Verify:** from a clean Trace checkout, `codex-delegate --local <a throwaway ticket>` produces a
 worktree in which `cd web && npm run typecheck && npm test && npm run format:check` passes with no
 manual dependency setup, and in which `cd pipeline && pytest -rs` passes with every
 tippecanoe-dependent test run and `trace_pipeline.__file__` pointing inside the worktree.
 **Owner:** claude
+
+**Done (2026-09-28), in `~/.local/bin/codex-delegate`:**
+- `dep_dirs` finds every `package.json`, `pyproject.toml`, `setup.py` and `requirements.txt`
+  directory, from the root down to three levels. The root is always included. `link_deps` links
+  each `node_modules`/`.venv` found there. A link that already exists and points at the main
+  checkout is counted too, so a `--fix` round's `$DEPS_NOTE` is no longer empty (a second bug the
+  old code had).
+- A linked `.venv` puts that worktree's source dir (or its `src/`) first on `PYTHONPATH`, and
+  `/opt/homebrew/bin` and `/usr/local/bin` are prepended to `PATH` when missing. Codex runs under
+  `env "${CENV[@]}"`, an array rather than word-split, because the real PATH holds an
+  `Application Support` entry that word-splitting broke.
+- `check_python` resolves each top-level package with `importlib.util.find_spec` under that
+  environment, from `/`, and dies before Codex if any resolves outside the worktree.
+- `--prepare` stops after setup and the checks, and prints Codex's environment. It exists so
+  this ticket's Verify could run without spending Codex quota.
+
+**Verified** with `--prepare` in place of `--local`; everything up to Codex is the same code:
+- Trace (`T-999`, throwaway): linked `pipeline/.venv` and `web/node_modules`, and both packages
+  resolve inside the worktree. A pytest plugin probing *plain* `pytest` printed the main
+  checkout's `trace_pipeline` without the helper's env, and the worktree's with it: 339 passed,
+  and the only skips need `data/`, with no tippecanoe skips. `web`: typecheck, 142 tests and
+  format:check pass.
+- Refusal (`T-998`, a patched copy pointing `PYTHONPATH` at the main checkout): it named both
+  packages, printed "not starting it", and exited 1.
+- A root-deps scratch repo: `node_modules` and `.venv` link at the root, fresh and on reuse.
+
+**Still open, outside this ticket's scope:** the manual steps in the `/delegate` skill
+(`~/.claude/skills/delegate/SKILL.md`) still describe hand-linking only `node_modules`, and say
+nothing about `PYTHONPATH`.
